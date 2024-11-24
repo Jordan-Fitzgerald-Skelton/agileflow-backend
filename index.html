@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.io Test</title>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>Socket.io Test Client</h1>
+    <script>
+        const socket = io('http://localhost:3000'); // Connect to your backend
+        socket.emit('join-room', 'room1'); // Join a room called 'room1'
+
+        // Listen for new-user events
+        socket.on('new-user', (message) => {
+            console.log(message); // Display the message in the browser's console
+        });
+    </script>
+</body>
+</html>
