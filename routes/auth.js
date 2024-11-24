@@ -1,14 +1,15 @@
+//test to implement the database  
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
-const { query } = require('../db/db'); // Use your existing query function
+const { query } = require('../db/db'); // Use the query function
 const authenticateToken = require('../middleware/auth'); // Import the middleware
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key'; // Use .env or default fallback
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key'; // Use .env file
 
-// User signup route
+// route to handle a user signing up
 router.post(
   '/signup',
   [
@@ -24,16 +25,16 @@ router.post(
     const { email, password } = req.body;
 
     try {
-      // Check if user already exists
+      // checks if user already exists
       const userExists = await query('SELECT * FROM users WHERE email = $1', [email]);
       if (userExists.length > 0) {
         return res.status(400).json({ message: 'User already exists' });
       }
 
-      // Hash the password
+      // hash the password
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      // Save user in the database
+      // save the user to the database
       await query('INSERT INTO users (email, password) VALUES ($1, $2)', [email, hashedPassword]);
 
       res.status(201).json({ message: 'User registered successfully' });
@@ -43,7 +44,7 @@ router.post(
   }
 );
 
-// User login route
+// route to handle the user loging in
 router.post(
   '/login',
   [
@@ -59,7 +60,7 @@ router.post(
     const { email, password } = req.body;
 
     try {
-      // Check if user exists
+      // check if user exists
       const users = await query('SELECT * FROM users WHERE email = $1', [email]);
       if (users.length === 0) {
         return res.status(401).json({ message: 'Invalid credentials' });
@@ -67,13 +68,13 @@ router.post(
 
       const user = users[0];
 
-      // Verify password
+      // check if the password is correct
       const isPasswordValid = await bcrypt.compare(password, user.password);
       if (!isPasswordValid) {
         return res.status(401).json({ message: 'Invalid credentials' });
       }
 
-      // Generate JWT
+      // Generate JWT (token)
       const token = jwt.sign({ email: user.email, id: user.id }, JWT_SECRET, { expiresIn: '1h' });
 
       res.json({ token });

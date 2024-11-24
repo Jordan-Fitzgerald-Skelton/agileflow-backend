@@ -1,7 +1,9 @@
-const { Pool } = require('pg');
-require('dotenv').config(); // Load environment variables from .env file
+//test database connection
 
-// PostgreSQL connection configuration
+const { Pool } = require('pg');
+require('dotenv').config(); // get the environment variables from .env file
+
+// PostgreSQL connection info
 const pool = new Pool({
   user: process.env.DB_USER,          // Loaded from .env
   host: process.env.DB_HOST,          // Loaded from .env
@@ -10,7 +12,7 @@ const pool = new Pool({
   port: process.env.DB_PORT,          // Loaded from .env
 });
 
-// Example query function
+
 const query = async (text, params) => {
   const client = await pool.connect();
   try {
