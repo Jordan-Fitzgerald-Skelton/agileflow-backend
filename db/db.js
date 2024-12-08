@@ -1,26 +1,23 @@
-//test database connection
-
 const { Pool } = require('pg');
-require('dotenv').config(); // get the environment variables from .env file
+require('dotenv').config();
 
-// PostgreSQL connection info
 const pool = new Pool({
-  user: process.env.DB_USER,          // Loaded from .env
-  host: process.env.DB_HOST,          // Loaded from .env
-  database: process.env.DB_NAME,      // Loaded from .env
-  password: process.env.DB_PASS,      // Loaded from .env
-  port: process.env.DB_PORT,          // Loaded from .env
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASS,
+    port: process.env.DB_PORT,
 });
 
-
-const query = async (text, params) => {
-  const client = await pool.connect();
-  try {
-    const res = await client.query(text, params);
-    return res.rows;
-  } finally {
-    client.release();
-  }
+// Generic query function
+const query = async (text, params = []) => {
+    try {
+        const { rows } = await pool.query(text, params);
+        return rows;
+    } catch (error) {
+        console.error('Database query error:', error);
+        throw error;
+    }
 };
 
 module.exports = { query };
