@@ -1,16 +1,25 @@
-// server.js
 const express = require('express');
-const http = require('http');
+const https = require('https'); // Import https module
+const fs = require('fs'); // Import file system module
 const { Server } = require('socket.io');
 const cors = require('cors');
-const { auth } = require('express-openid-connect');
 require('dotenv').config();
 
 // Import consolidated API routes
 const apiRoutes = require('./routes/APIroutes');
 
 const app = express();
-const server = http.createServer(app);
+
+// Load SSL certificates
+const sslOptions = {
+    key: fs.readFileSync('./ssl/key.pem'),
+    cert: fs.readFileSync('./ssl/cert.pem'),
+};
+
+// Create HTTPS server
+const server = https.createServer(sslOptions, app);
+
+// Attach Socket.io to the HTTPS server
 const io = new Server(server, {
     cors: { origin: '*' },
 });
@@ -18,19 +27,6 @@ const io = new Server(server, {
 // Middleware
 app.use(cors());
 app.use(express.json());
-
-// Auth0 Configuration
-const authConfig = {
-    authRequired: false,
-    auth0Logout: true,
-    baseURL: process.env.BASE_URL || 'http://localhost:3000',
-    clientID: process.env.AUTH0_CLIENT_ID,
-    issuerBaseURL: process.env.AUTH0_DOMAIN,
-    secret: process.env.AUTH0_SECRET,
-};
-
-// Apply Auth0 middleware
-app.use(auth(authConfig));
 
 // Register API routes
 app.use('/api', apiRoutes);
@@ -50,8 +46,8 @@ io.on('connection', (socket) => {
     });
 });
 
-// Start the Server
+// Start the HTTPS server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Secure server is running at https://localhost:${PORT}`);
 });
