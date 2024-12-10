@@ -1,12 +1,13 @@
 const express = require('express');
-const { createRoom } = require('../controllers/roomController');
+const { createRoom, joinRoom } = require('../controllers/roomController');
 
 const router = express.Router();
 
-// Room routes
+//Room routes
 router.post('/rooms', createRoom);
+router.post('/rooms/join', joinRoom);
 
-// Example of a public route
+//Public route
 router.get('/', (req, res) => {
   res.send('This is a public route');
 });
