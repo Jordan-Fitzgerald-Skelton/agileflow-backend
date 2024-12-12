@@ -7,20 +7,20 @@ const pool = new Pool({
     database: process.env.DB_NAME,
     password: process.env.DB_PASS,
     port: process.env.DB_PORT,
-    //Max number of clients 
+    //max number of clients 
     max: 20,
-    //If idele for 30 seconds it closes the connection
+    //if idele for 30 seconds it closes the connection
     idleTimeoutMillis: 30000,
     //returns an error if connection time takes longer than 2 seconds
     connectionTimeoutMillis: 2000,
 });
 
-//Creates an entry in the log for the connection 
+//creates an entry in the log for the connection 
 pool.on('connect', () => {
     console.log('Connected to the database');
 });
 
-//Query function
+//query function
 const query = async (text, params = []) => {
     try {
         const { rows } = await pool.query(text, params);
@@ -31,7 +31,7 @@ const query = async (text, params = []) => {
     }
 };
 
-//Handles shuting down the 'pool'
+//handles shuting down the 'pool'
 const closePool = async () => {
     try {
         await pool.end();

@@ -9,7 +9,6 @@ const app = express();
 const http = require('http');
 const server = http.createServer(app);
 
-//Attachs the Socket.io server to the HTTP server
 const io = new Server(server, {
     cors: { origin: '*' },
 });
@@ -21,32 +20,32 @@ app.use('/api', apiRoutes);
 
 const rooms = {};
 
-//Generates a random invite code
+//generates a random invite code
 function generateInviteCode(length = 8) {
     return Math.random().toString(36).substr(2, length);
 }
 
-// WebSocket Events
+//websocket events
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
-    //Create a room with an invite code
+    //create a room with an invite code
     socket.on('createRoom', (roomId) => {
-        //Validates that the room doesn't already exist
+        //checks that the room doesn't already exist
         if (rooms[roomId]) {
             socket.emit('error', `Room ${roomId} already exists.`);
             return;
         }
-        //Gets a random ivite code
+        //gets a random ivite code
         const inviteCode = generateInviteCode();
-        //Creates the room
+        //creates the room
         rooms[roomId] = {
             participants: { [socket.id]: true },
             inviteCode: inviteCode,
         };
-        // Join the room
+        //joins the room
         socket.join(roomId);
-        //Provides the invite code to the user
+        //provides the invite code to the user
         socket.emit('roomCreated', {
             message: `Room ${roomId} created successfully.`,
             inviteCode: inviteCode,
@@ -54,24 +53,21 @@ io.on('connection', (socket) => {
         console.log(`Room ${roomId} created with invite code: ${inviteCode}`);
     });
 
-    //Join Room with an invite code
+    //joining a room with an invite code
     socket.on('joinByInvite', (inviteCode) => {
-        //Find the room using the invite code
+        //finds the room using the invite code
         const roomId = Object.keys(rooms).find((roomId) => rooms[roomId].inviteCode === inviteCode);
-        //Validation for the invite codes
         if (!roomId) {
             socket.emit('error', 'Invalid invite code.');
             return;
         }
         socket.join(roomId);
         rooms[roomId].participants[socket.id] = true;
-        //Creates a message to say you have joined a room
         socket.emit('joinedRoom', `You have successfully joined room ${roomId}.`);
-        //Creates an entry in the log to say you joined 
         console.log(`User ${socket.id} joined room ${roomId} using invite code.`);
     });
 
-    //User disconnects
+    //for when a user disconnects
     socket.on('disconnect', () => {
         console.log('A user disconnected:', socket.id);
         for (const roomId in rooms) {
@@ -83,7 +79,7 @@ io.on('connection', (socket) => {
     });
 });
 
-//Start the server
+//start the server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server is running at http://localhost:${PORT}`);
