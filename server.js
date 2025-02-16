@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 const { Pool } = require('pg');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
-const { body, validationResult } = require('express-validator');
+const validator = require('validator');
 require('dotenv').config();
 
 // Initialize Express app and HTTP server
@@ -26,7 +26,6 @@ const pool = new Pool({
   port: process.env.DB_PORT,
 });
 
-// Connect to PostgreSQL
 pool.connect((err) => {
   if (err) {
     console.error('Database connection failed:', err.stack);
@@ -34,6 +33,8 @@ pool.connect((err) => {
     console.log('Connected to PostgreSQL database');
   }
 });
+
+module.exports = { app, server, pool };
 
 // Generate unique invite code securely
 const generateUniqueInviteCode = async () => {
@@ -48,24 +49,15 @@ const generateUniqueInviteCode = async () => {
 };
 
 // Create Room
-app.post('/create-room', [
-  body('roomName').isString().notEmpty(),
-  body('isPersistent').isBoolean(),
-], async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ success: false, errors: errors.array() });
-  }
-
+app.post('/create-room', async (req, res) => {
   try {
     const { roomName, isPersistent } = req.body;
-    const adminId = req.user.sub; // Ensure user is authenticated
     const inviteCode = await generateUniqueInviteCode();
     const roomId = uuidv4();
 
     await pool.query(
-      'INSERT INTO refine_rooms (room_id, room_name, is_persistent, invite_code, admin_id, created_at) VALUES ($1, $2, $3, $4, $5, NOW())',
-      [roomId, roomName, isPersistent, inviteCode, adminId]
+      'INSERT INTO refine_rooms (room_id, room_name, is_persistent, invite_code, created_at) VALUES ($1, $2, $3, $4, NOW())',
+      [roomId, roomName, isPersistent, inviteCode]
     );
 
     res.json({ success: true, roomId, inviteCode });
@@ -79,14 +71,12 @@ app.post('/create-room', [
 app.post('/join-room', async (req, res) => {
   try {
     const { inviteCode } = req.body;
-    const userId = req.user.sub; // Ensure user is authenticated
     const result = await pool.query('SELECT room_id FROM refine_rooms WHERE invite_code = $1', [inviteCode]);
     if (result.rowCount === 0) {
       return res.status(404).json({ success: false, message: 'Invalid invite code.' });
     }
 
     const roomId = result.rows[0].room_id;
-    await pool.query('INSERT INTO room_users (room_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [roomId, userId]);
     res.json({ success: true, roomId });
   } catch (error) {
     console.error('Error joining room:', error);
@@ -98,11 +88,10 @@ app.post('/join-room', async (req, res) => {
 app.post('/submit-prediction', async (req, res) => {
   try {
     const { roomId, prediction } = req.body;
-    const userId = req.user.sub; // Ensure user is authenticated
 
     await pool.query(
-      'INSERT INTO predictions (room_id, user_id, prediction) VALUES ($1, $2, $3) ON CONFLICT (room_id, user_id) DO UPDATE SET prediction = EXCLUDED.prediction',
-      [roomId, userId, prediction]
+      'INSERT INTO predictions (room_id, prediction) VALUES ($1, $2) ON CONFLICT (room_id) DO UPDATE SET prediction = EXCLUDED.prediction',
+      [roomId, prediction]
     );
 
     res.json({ success: true, message: 'Prediction submitted successfully.' });
@@ -116,18 +105,14 @@ app.post('/submit-prediction', async (req, res) => {
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
-  socket.on('userJoinRoom', ({ roomId, userId }) => {
+  socket.on('joinRoom', ({ roomId }) => {
     socket.join(roomId);
-    console.log(`User ${userId} joined room ${roomId}`);
+    console.log(`User joined room ${roomId}`);
   });
 
   socket.on('submitPrediction', async ({ roomId }) => {
-    try {
-      const result = await pool.query('SELECT AVG(prediction) as avg_prediction FROM predictions WHERE room_id = $1', [roomId]);
-      io.to(roomId).emit('updatePredictions', { avgPrediction: result.rows[0].avg_prediction });
-    } catch (error) {
-      console.error('Error calculating average prediction:', error);
-    }
+    const result = await pool.query('SELECT AVG(prediction) as avg_prediction FROM predictions WHERE room_id = $1', [roomId]);
+    io.to(roomId).emit('updatePredictions', { avgPrediction: result.rows[0].avg_prediction });
   });
 
   socket.on('disconnect', () => {
