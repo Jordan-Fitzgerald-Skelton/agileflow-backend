@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 const { Pool } = require('pg');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
-const validator = require('validator');
+const { body, validationResult } = require('express-validator');
 require('dotenv').config();
 
 // Initialize Express app and HTTP server
@@ -26,6 +26,7 @@ const pool = new Pool({
   port: process.env.DB_PORT,
 });
 
+// Connect to PostgreSQL
 pool.connect((err) => {
   if (err) {
     console.error('Database connection failed:', err.stack);
@@ -34,73 +35,103 @@ pool.connect((err) => {
   }
 });
 
-// Helper function to validate input
-const validateInput = (input, type) => {
-  if (type === 'string') return input && typeof input === 'string' && input.trim() !== '';
-  if (type === 'number') return typeof input === 'number' && input >= 0;
-  if (type === 'boolean') return typeof input === 'boolean';
-  return false;
-};
-
-// Sanitize and check if room name exists
-const sanitizeRoomName = (roomName) => roomName.replace(/[^a-zA-Z0-9 ]/g, '').trim();
-
-const checkRoomExists = async (roomName) => {
-  const result = await pool.query('SELECT * FROM refine_rooms WHERE room_name = $1', [roomName]);
-  return result.rowCount > 0;
-};
-
 // Generate unique invite code securely
 const generateUniqueInviteCode = async () => {
   let inviteCode;
   let isUnique = false;
   while (!isUnique) {
-    inviteCode = crypto.randomBytes(3).toString('hex'); // Secure 6-char code
+    inviteCode = crypto.randomBytes(3).toString('hex');
     const check = await pool.query('SELECT * FROM refine_rooms WHERE invite_code = $1', [inviteCode]);
     if (check.rowCount === 0) isUnique = true;
   }
   return inviteCode;
 };
 
-// Socket.io logic
+// Create Room
+app.post('/create-room', [
+  body('roomName').isString().notEmpty(),
+  body('isPersistent').isBoolean(),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, errors: errors.array() });
+  }
+
+  try {
+    const { roomName, isPersistent } = req.body;
+    const adminId = req.user.sub; // Ensure user is authenticated
+    const inviteCode = await generateUniqueInviteCode();
+    const roomId = uuidv4();
+
+    await pool.query(
+      'INSERT INTO refine_rooms (room_id, room_name, is_persistent, invite_code, admin_id, created_at) VALUES ($1, $2, $3, $4, $5, NOW())',
+      [roomId, roomName, isPersistent, inviteCode, adminId]
+    );
+
+    res.json({ success: true, roomId, inviteCode });
+  } catch (error) {
+    console.error('Error creating room:', error);
+    res.status(500).json({ success: false, message: 'Failed to create room.' });
+  }
+});
+
+// Join Room
+app.post('/join-room', async (req, res) => {
+  try {
+    const { inviteCode } = req.body;
+    const userId = req.user.sub; // Ensure user is authenticated
+    const result = await pool.query('SELECT room_id FROM refine_rooms WHERE invite_code = $1', [inviteCode]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Invalid invite code.' });
+    }
+
+    const roomId = result.rows[0].room_id;
+    await pool.query('INSERT INTO room_users (room_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [roomId, userId]);
+    res.json({ success: true, roomId });
+  } catch (error) {
+    console.error('Error joining room:', error);
+    res.status(500).json({ success: false, message: 'Failed to join room.' });
+  }
+});
+
+// Submit Prediction
+app.post('/submit-prediction', async (req, res) => {
+  try {
+    const { roomId, prediction } = req.body;
+    const userId = req.user.sub; // Ensure user is authenticated
+
+    await pool.query(
+      'INSERT INTO predictions (room_id, user_id, prediction) VALUES ($1, $2, $3) ON CONFLICT (room_id, user_id) DO UPDATE SET prediction = EXCLUDED.prediction',
+      [roomId, userId, prediction]
+    );
+
+    res.json({ success: true, message: 'Prediction submitted successfully.' });
+  } catch (error) {
+    console.error('Error submitting prediction:', error);
+    res.status(500).json({ success: false, message: 'Failed to submit prediction.' });
+  }
+});
+
+// Socket.io Logic
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
-  socket.on('createRoom', async ({ roomName, isPersistent }, callback) => {
-    roomName = sanitizeRoomName(roomName);
-    if (!validateInput(roomName, 'string') || !validateInput(isPersistent, 'boolean')) {
-      return callback({ success: false, message: 'Invalid input.' });
-    }
+  socket.on('userJoinRoom', ({ roomId, userId }) => {
+    socket.join(roomId);
+    console.log(`User ${userId} joined room ${roomId}`);
+  });
 
-    if (await checkRoomExists(roomName)) {
-      return callback({ success: false, message: 'Room name already taken.' });
-    }
-
+  socket.on('submitPrediction', async ({ roomId }) => {
     try {
-      const roomId = uuidv4();
-      const inviteCode = await generateUniqueInviteCode();
-
-      const result = await pool.query(
-        'INSERT INTO refine_rooms (room_id, room_name, is_persistent, invite_code, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING *',
-        [roomId, roomName, isPersistent, inviteCode]
-      );
-
-      const room = result.rows[0];
-      socket.join(room.room_id);
-      callback({ success: true, room });
-
-      console.log(`Room created: ${room.room_name}, Invite Code: ${inviteCode}`);
+      const result = await pool.query('SELECT AVG(prediction) as avg_prediction FROM predictions WHERE room_id = $1', [roomId]);
+      io.to(roomId).emit('updatePredictions', { avgPrediction: result.rows[0].avg_prediction });
     } catch (error) {
-      console.error('Error creating room:', error);
-      callback({ success: false, message: 'Failed to create room.' });
+      console.error('Error calculating average prediction:', error);
     }
   });
 
   socket.on('disconnect', () => {
     console.log('A user disconnected:', socket.id);
-    socket.rooms.forEach((room) => {
-      socket.leave(room);
-    });
   });
 });
 
