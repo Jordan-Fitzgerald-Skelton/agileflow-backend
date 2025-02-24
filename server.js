@@ -129,9 +129,10 @@ app.post('/retro/join/room', async (req, res) => {
   }
 });
 
+
 // ========================= Predictions Handling =========================
 // Submit Prediction
-app.post("/api/refinement/prediction", async (req, res) => {
+app.post("/refinement/prediction/submit", async (req, res) => {
   const { room_id, role, name, prediction } = req.body;
   if (!role || isNaN(prediction) || prediction <= 0)
     return res.status(400).json({ error: "Invalid prediction data" });
@@ -145,25 +146,26 @@ app.post("/api/refinement/prediction", async (req, res) => {
   res.json({ message: "Prediction submitted successfully" });
 });
 
+app.get("/refinment/get/predictions"), async(req, res) => {
+  const { room_id } = req.body;
+  
+  //retrieve predictions, order by role, calculate results, return results in a list (role, final_prediction)
+  await pool.query(
+  );
+
+  res.json({})
+}
+
 // ========================= Retrospective Comments =========================
 // Add Retro Comment
-app.post("/api/retro/comments", async (req, res) => {
+app.post("/retro/new/comment", async (req, res) => {
   const { room_id, comment } = req.body;
-  await pool.query(
-    "INSERT INTO retro_comments (room_id, comment) VALUES ($1, $2)",
-    [room_id, comment]
-  );
 
-  const results = await pool.query(
-    "SELECT comment FROM retro_comments WHERE room_id = $1",
-    [room_id]
-  );
+  io.to(room_id).emit("new_comment", comment);
 
-  io.to(room_id).emit("comment_added", results.rows);
   res.json({ message: "Comment added successfully" });
 });
 
-// ========================= Action Items =========================
 // Create Action Item
 app.post("/retro/create/action", async (req, res) => {
   const { room_id, user_name, description } = req.body;
