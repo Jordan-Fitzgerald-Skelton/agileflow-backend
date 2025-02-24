@@ -2,17 +2,15 @@ require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const { v4: uuidv4 } = require('uuid');
-const crypto = require('crypto');
+const { v4: uuidv4 } = require("uuid");
+const crypto = require("crypto");
 const cors = require("cors");
 const pg = require("pg");
 const nodemailer = require("nodemailer");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" },
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 const pool = new pg.Pool({
   user: process.env.DB_USER,
@@ -23,15 +21,18 @@ const pool = new pg.Pool({
 });
 
 pool.connect((err) => {
-  if (err) {
-    console.error('Database connection failed:', err.stack);
-  } else {
-    console.log('Connected to PostgreSQL database');
-  }
+  if (err) console.error("Database connection failed:", err.stack);
+  else console.log("Connected to PostgreSQL database");
 });
 
 app.use(cors());
 app.use(express.json());
+
+//Logging middleware to help provide better responses when there are issues 
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
 
 //used to temperarly store perdictions 
 const TEMP_TABLE = "refinement_predictions";
@@ -44,126 +45,140 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Generate unique invite code securely
+//Generates a unique invite code
 const generateUniqueInviteCode = async () => {
-  let inviteCode;
-  let isUnique = false;
-  while (!isUnique) {
-    inviteCode = crypto.randomBytes(3).toString('hex');
-    const check = await pool.query('SELECT * FROM refine_rooms WHERE invite_code = $1', [inviteCode]);
-    if (check.rowCount === 0) isUnique = true;
-  }
+  let inviteCode, check;
+  do {
+    inviteCode = crypto.randomBytes(3).toString("hex");
+    check = await pool.query("SELECT 1 FROM refinement_rooms WHERE invite_code = $1", [inviteCode]);
+  } while (check.rowCount > 0);
   return inviteCode;
 };
 
 // ========================= Room Management =========================
 // Create Refinement Room
 app.post("/refinement/create/room", async (req, res) => {
-  try{
+  try {
     const invite_code = await generateUniqueInviteCode();
     const room_id = uuidv4();
-    await pool.query(
-      "INSERT INTO refinement_rooms (room_id, invite_code, created_at) VALUES ($1, $2, CURRENT_TIMESTAMP)",
+    const result = await pool.query(
+      "INSERT INTO refinement_rooms (room_id, invite_code, created_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
       [room_id, invite_code]
     );
-    res.json({ message: "Refinement Room created successfully" });
-  }catch (error) {
-    console.error('Error creating room:', error);
-    res.status(500).json({ success: false, message: 'Failed to create room.' });
+    res.json({ success: true, message: "Refinement Room created successfully", room_id: result.rows[0].room_id, invite_code: result.rows[0].invite_code });
+  } catch (error) {
+    console.error("Error creating room:", error);
+    res.status(500).json({ success: false, message: "Failed to create room." });
   }
 });
 
 // Join Refinement Room
-app.post('/refinement/join/room', async (req, res) => {
+app.post("/refinement/join/room", async (req, res) => {
   try {
     const { name, email, invite_code } = req.body;
-    const result = await pool.query('SELECT room_id FROM refinement_rooms WHERE invite_code = $1', [invite_code]);
-    if (result.rowCount === 0) {
-      return res.status(404).json({ success: false, message: 'Invalid invite code.' });
-    }
+    const result = await pool.query("SELECT room_id FROM refinement_rooms WHERE invite_code = $1", [invite_code]);
+    if (result.rowCount === 0) return res.status(404).json({ success: false, message: "Invalid invite code." });
+
     const room_id = result.rows[0].room_id;
     await pool.query(
-      "INSERT INTO room_users (room_id, name, email) SELECT $1, $2, $3 WHERE NOT EXISTS (SELECT 1 FROM room_users WHERE room_id = $1 AND email = $3)",
+      "INSERT INTO room_users (room_id, name, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
       [room_id, name, email]
     );
-    res.json({ message: "Joined refinement room successfully" });
+    res.json({ success: true, message: "Joined refinement room successfully", room_id });
   } catch (error) {
-    console.error('Error joining room:', error);
-    res.status(500).json({ success: false, message: 'Failed to join room.' });
+    console.error("Error joining room:", error);
+    res.status(500).json({ success: false, message: "Failed to join room." });
   }
 });
 
 // Create Retro Room
 app.post("/retro/create/room", async (req, res) => {
-  try{
+  try {
     const invite_code = await generateUniqueInviteCode();
     const room_id = uuidv4();
-    await pool.query(
-      "INSERT INTO retro_rooms (room_id, invite_code, created_at) VALUES ($1, $2, CURRENT_TIMESTAMP)",
+    const result = await pool.query(
+      "INSERT INTO retro_rooms (room_id, invite_code, created_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
       [room_id, invite_code]
     );
-    res.json({ message: "Refinement Room created successfully" });
-  }catch (error) {
-    console.error('Error creating room:', error);
-    res.status(500).json({ success: false, message: 'Failed to create room.' });
+    res.json({ success: true, message: "Retro Room created successfully", room_id: result.rows[0].room_id, invite_code: result.rows[0].invite_code });
+  } catch (error) {
+    console.error("Error creating room:", error);
+    res.status(500).json({ success: false, message: "Failed to create room." });
   }
 });
 
 // Join Retro Room
-app.post('/retro/join/room', async (req, res) => {
+app.post("/retro/join/room", async (req, res) => {
   try {
     const { name, email, invite_code } = req.body;
-    const result = await pool.query('SELECT room_id FROM retro_rooms WHERE invite_code = $1', [invite_code]);
-    if (result.rowCount === 0) {
-      return res.status(404).json({ success: false, message: 'Invalid invite code.' });
-    }
+    const result = await pool.query("SELECT room_id FROM retro_rooms WHERE invite_code = $1", [invite_code]);
+    if (result.rowCount === 0) return res.status(404).json({ success: false, message: "Invalid invite code." });
+
     const room_id = result.rows[0].room_id;
     await pool.query(
-      "INSERT INTO room_users (room_id, name, email) SELECT $1, $2, $3 WHERE NOT EXISTS (SELECT 1 FROM room_users WHERE room_id = $1 AND email = $3)",
+      "INSERT INTO room_users (room_id, name, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
       [room_id, name, email]
     );
-    res.json({ message: "Joined refinement room successfully" });
+    res.json({ success: true, message: "Joined retro room successfully", room_id });
   } catch (error) {
-    console.error('Error joining room:', error);
-    res.status(500).json({ success: false, message: 'Failed to join room.' });
+    console.error("Error joining room:", error);
+    res.status(500).json({ success: false, message: "Failed to join room." });
   }
 });
-
 
 // ========================= Predictions Handling =========================
 // Submit Prediction
 app.post("/refinement/prediction/submit", async (req, res) => {
-  const { room_id, role, name, prediction } = req.body;
-  if (!role || isNaN(prediction) || prediction <= 0)
-    return res.status(400).json({ error: "Invalid prediction data" });
+  const { room_id, role, prediction } = req.body;
+  if (!role || isNaN(prediction) || prediction <= 0) {
+    return res.status(400).json({ success: false, message: "Invalid prediction data" });
+  }
 
-  await pool.query(
-    `INSERT INTO ${TEMP_TABLE} (room_id, role, name, prediction)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (room_id, name) DO UPDATE SET prediction = EXCLUDED.prediction`,
-    [room_id, role, name, prediction]
-  );
-  res.json({ message: "Prediction submitted successfully" });
+  try {
+    await pool.query(
+      `INSERT INTO ${TEMP_TABLE} (room_id, role, prediction, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (room_id, role) DO UPDATE SET prediction = EXCLUDED.prediction`,
+      [room_id, role, prediction]
+    );
+
+    res.json({ success: true, message: "Prediction submitted successfully" });
+  } catch (error) {
+    console.error("Error submitting prediction:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
 });
 
-app.get("/refinment/get/predictions"), async(req, res) => {
-  const { room_id } = req.body;
-  
-  //retrieve predictions, order by role, calculate results, return results in a list (role, final_prediction)
-  await pool.query(
-  );
+//Retrieve Predictions
+app.get("/refinement/get/predictions", async (req, res) => {
+  const { room_id } = req.query;
+  if (!room_id) return res.status(400).json({ success: false, message: "Missing room_id" });
 
-  res.json({})
-}
+  try {
+    const result = await pool.query(
+      `SELECT role, AVG(prediction) AS final_prediction FROM ${TEMP_TABLE} WHERE room_id = $1 GROUP BY role ORDER BY role`,
+      [room_id]
+    );
 
-// ========================= Retrospective Comments =========================
+    const predictions = result.rows.map((row) => ({
+      role: row.role,
+      final_prediction: parseFloat(row.final_prediction),
+    }));
+
+    await pool.query(`DELETE FROM ${TEMP_TABLE} WHERE room_id = $1`, [room_id]);
+    res.json({ success: true, predictions });
+  } catch (error) {
+    console.error("Error retrieving predictions:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ========================= Retro Comments =========================
 // Add Retro Comment
 app.post("/retro/new/comment", async (req, res) => {
   const { room_id, comment } = req.body;
-
   io.to(room_id).emit("new_comment", comment);
-
-  res.json({ message: "Comment added successfully" });
+  res.json({ success: true, message: "Comment added successfully" });
 });
 
 // Create Action Item
@@ -191,33 +206,62 @@ app.post("/retro/create/action", async (req, res) => {
     text: `Hello ${user_name},\n\nYou have been assigned a new action item:\n\n${description}\n\nBest Regards,\nAgileFlow Team`,
   };
 
-  transporter.sendMail(mailOptions, () => {});
+  transporter.sendMail(mailOptions, (err, info) => {
+    if (err) {
+      console.error("Error sending email:", err);
+    } else {
+      console.log("Email sent:", info.response);
+    }
+  });
+  
   io.to(room_id).emit("action_added", { user_name, description });
 
   res.json({ message: "Action created and email sent successfully" });
 });
 
 // ========================= WebSocket Events =========================
-io.on("connection", (socket) => {
-  console.log("User connected");
+// In-memory tracking of active sockets per room
+const activeRooms = new Map();
 
-  socket.on("join_room", (invite_code) => {
-    pool.query(
-      "SELECT room_id FROM rooms WHERE invite_code = $1",
-      [invite_code],
-      (err, res) => {
-        if (err || res.rows.length === 0) {
-          socket.emit("error", { message: "Room not found" });
-        } else {
-          socket.join(res.rows[0].room_id);
-          console.log(`User joined room: ${res.rows[0].room_id}`);
-        }
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+
+  // When a client emits "join_room" with an invite code (and optionally a name)
+  socket.on("join_room", async (data) => {
+    const { invite_code, name } = data;
+    try {
+      const result = await pool.query(
+        "SELECT room_id FROM refinement_rooms WHERE invite_code = $1 UNION SELECT room_id FROM retro_rooms WHERE invite_code = $1",
+        [invite_code]
+      );
+      if (result.rowCount === 0) {
+        socket.emit("error", { message: "Room not found" });
+      } else {
+        const room_id = result.rows[0].room_id;
+        socket.join(room_id);
+        console.log(`User ${socket.id} joined room: ${room_id}`);
+
+        // Track active users for the room
+        if (!activeRooms.has(room_id)) activeRooms.set(room_id, new Set());
+        activeRooms.get(room_id).add(socket.id);
+        // Emit updated user list for this room
+        io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id)));
       }
-    );
+    } catch (error) {
+      console.error("Error in join_room:", error);
+      socket.emit("error", { message: "Internal server error" });
+    }
   });
 
+  // On disconnect, remove the socket from any room's active list and broadcast updated list
   socket.on("disconnect", () => {
-    console.log("User disconnected");
+    console.log("User disconnected:", socket.id);
+    activeRooms.forEach((sockets, room_id) => {
+      if (sockets.has(socket.id)) {
+        sockets.delete(socket.id);
+        io.to(room_id).emit("user_list", Array.from(sockets));
+      }
+    });
   });
 });
 
