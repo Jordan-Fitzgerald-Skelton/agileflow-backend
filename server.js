@@ -253,6 +253,19 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("submit_prediction", (data) => {
+    const { room_id, role, prediction } = data;
+    io.to(room_id).emit("prediction_submitted", { role, prediction });
+  });  
+
+  socket.on("create_room", (roomData) => {
+    io.emit("A new room has been created", roomData);
+  });
+
+  socket.on("create_action", (actionData) => {
+    io.to(actionData.room_id).emit("action_created", actionData);
+  });
+
   // On disconnect, remove the socket from any room's active list and broadcast updated list
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
