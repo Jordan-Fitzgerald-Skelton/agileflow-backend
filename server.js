@@ -226,9 +226,8 @@ const activeRooms = new Map();
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  // When a client emits "join_room" with an invite code (and optionally a name)
   socket.on("join_room", async (data) => {
-    const { invite_code, name } = data;
+    const { invite_code, name, email } = data;
     try {
       const result = await pool.query(
         "SELECT room_id FROM refinement_rooms WHERE invite_code = $1 UNION SELECT room_id FROM retro_rooms WHERE invite_code = $1",
@@ -239,19 +238,24 @@ io.on("connection", (socket) => {
       } else {
         const room_id = result.rows[0].room_id;
         socket.join(room_id);
-        console.log(`User ${socket.id} joined room: ${room_id}`);
-
-        // Track active users for the room
-        if (!activeRooms.has(room_id)) activeRooms.set(room_id, new Set());
-        activeRooms.get(room_id).add(socket.id);
-        // Emit updated user list for this room
-        io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id)));
+        console.log(`User ${socket.id} joined room: ${room_id} (${name})`);
+  
+        // Track active users with details
+        if (!activeRooms.has(room_id)) activeRooms.set(room_id, new Map());
+        activeRooms.get(room_id).set(socket.id, { name, email });
+  
+        // Emit updated user list with names & emails
+        io.to(room_id).emit(
+          "user_list",
+          Array.from(activeRooms.get(room_id).values())
+        );
       }
     } catch (error) {
       console.error("Error in join_room:", error);
       socket.emit("error", { message: "Internal server error" });
     }
   });
+  
 
   socket.on("submit_prediction", (data) => {
     const { room_id, role, prediction } = data;
@@ -269,13 +273,14 @@ io.on("connection", (socket) => {
   // On disconnect, remove the socket from any room's active list and broadcast updated list
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
-    activeRooms.forEach((sockets, room_id) => {
-      if (sockets.has(socket.id)) {
-        sockets.delete(socket.id);
-        io.to(room_id).emit("user_list", Array.from(sockets));
+    activeRooms.forEach((users, room_id) => {
+      if (users.has(socket.id)) {
+        users.delete(socket.id);
+        io.to(room_id).emit("user_list", Array.from(users.values())); // Send updated list
       }
     });
   });
+  
 });
 
 server.listen(5000, () => {
