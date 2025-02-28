@@ -75,11 +75,18 @@ app.post("/refinement/create/room", async (req, res) => {
 // Join Refinement Room
 app.post("/refinement/join/room", async (req, res) => {
   try {
-    const { name, email, invite_code } = req.body;
-    const result = await pool.query("SELECT room_id FROM refinement_rooms WHERE invite_code = $1", [invite_code]);
-    if (result.rowCount === 0) return res.status(404).json({ success: false, message: "Invalid invite code." });
-
-    const room_id = result.rows[0].room_id;
+    const { invite_code, name, email } = req.body;
+    if (!invite_code || !name || !email) {
+      return res.status(400).json({ success: false, message: "Missing required fields." });
+    }
+    const result = await pool.query(
+      "SELECT room_id FROM refinement_rooms WHERE invite_code = $1",
+      [invite_code]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: "Invalid invite code." });
+    }
+    const { room_id } = result.rows[0];
     await pool.query(
       "INSERT INTO room_users (room_id, name, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
       [room_id, name, email]
@@ -87,9 +94,10 @@ app.post("/refinement/join/room", async (req, res) => {
     res.json({ success: true, message: "Joined refinement room successfully", room_id });
   } catch (error) {
     console.error("Error joining room:", error);
-    res.status(500).json({ success: false, message: "Failed to join room." });
+    res.status(500).json({ success: false, message: "Failed to join refinement room." });
   }
 });
+
 
 // Create Retro Room
 app.post("/retro/create/room", async (req, res) => {
@@ -110,11 +118,19 @@ app.post("/retro/create/room", async (req, res) => {
 // Join Retro Room
 app.post("/retro/join/room", async (req, res) => {
   try {
-    const { name, email, invite_code } = req.body;
-    const result = await pool.query("SELECT room_id FROM retro_rooms WHERE invite_code = $1", [invite_code]);
-    if (result.rowCount === 0) return res.status(404).json({ success: false, message: "Invalid invite code." });
-
-    const room_id = result.rows[0].room_id;
+    const { invite_code, name, email } = req.body;
+    if (!invite_code || !name || !email) {
+      return res.status(400).json({ success: false, message: "Missing required fields." });
+    }
+    // Check if the invite code exists in `retro_rooms`
+    const result = await pool.query(
+      "SELECT room_id FROM retro_rooms WHERE invite_code = $1",
+      [invite_code]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: "Invalid invite code." });
+    }
+    const { room_id } = result.rows[0];
     await pool.query(
       "INSERT INTO room_users (room_id, name, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
       [room_id, name, email]
@@ -122,7 +138,7 @@ app.post("/retro/join/room", async (req, res) => {
     res.json({ success: true, message: "Joined retro room successfully", room_id });
   } catch (error) {
     console.error("Error joining room:", error);
-    res.status(500).json({ success: false, message: "Failed to join room." });
+    res.status(500).json({ success: false, message: "Failed to join retro room." });
   }
 });
 
