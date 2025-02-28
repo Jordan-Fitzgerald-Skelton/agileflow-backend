@@ -286,6 +286,15 @@ io.on("connection", (socket) => {
     io.to(actionData.room_id).emit("action_created", actionData);
   });
 
+  socket.on("leave_room", ({ roomId }) => {
+  socket.leave(roomId);
+  if (activeRooms.has(roomId)) {
+    activeRooms.get(roomId).delete(socket.id);
+    io.to(roomId).emit("user_list", Array.from(activeRooms.get(roomId).values()));
+  }
+  console.log(`Socket ${socket.id} left room: ${roomId}`);
+  });
+
   // On disconnect, remove the socket from any room's active list and broadcast updated list
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
