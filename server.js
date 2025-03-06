@@ -287,12 +287,15 @@ io.on("connection", (socket) => {
   });
 
   socket.on("leave_room", ({ roomId }) => {
-  socket.leave(roomId);
-  if (activeRooms.has(roomId)) {
-    activeRooms.get(roomId).delete(socket.id);
-    io.to(roomId).emit("user_list", Array.from(activeRooms.get(roomId).values()));
-  }
-  console.log(`Socket ${socket.id} left room: ${roomId}`);
+    socket.leave(roomId);
+    if (activeRooms.has(roomId)) {
+      activeRooms.get(roomId).delete(socket.id);
+      if (activeRooms.get(roomId).size === 0) {
+        activeRooms.delete(roomId); // Cleanup empty room
+      }
+      io.to(roomId).emit("user_list", Array.from(activeRooms.get(roomId).values()));
+    }
+    console.log(`Socket ${socket.id} left room: ${roomId}`);
   });
 
   // On disconnect, remove the socket from any room's active list and broadcast updated list
