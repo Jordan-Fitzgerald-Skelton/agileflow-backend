@@ -10,7 +10,13 @@ const nodemailer = require("nodemailer");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "http://localhost:4000" } });
+const io = new Server(server, { 
+  cors: { 
+    origin: process.env.FRONT_APP,
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"]
+  } 
+});
 
 const pool = new pg.Pool({
   user: process.env.DB_USER,
@@ -20,11 +26,25 @@ const pool = new pg.Pool({
   port: process.env.DB_PORT,
 });
 
-pool.connect((err) => {
-  if (err) console.error("Database connection failed:", err.stack);
-  else console.log("Connected to PostgreSQL database");
-});
+const connectWithRetry = () => {
+  pool.connect((err, client, release) => {
+    if (err) {
+      console.error('Failed to connect to the database', err);
+      // Retry connection after 5 seconds
+      setTimeout(connectWithRetry, 5000);
+      return;
+    }
+    release();
+    console.log('Successfully connected to PostgreSQL database');
 
+    pool.on('error', (err) => {
+      console.error('Unexpected database error', err);
+      process.exit(-1);
+    });
+  });
+};
+
+connectWithRetry();
 app.use(cors());
 app.use(express.json());
 
@@ -367,9 +387,18 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
     activeRooms.forEach((users, room_id) => {
-      if (users.has(socket.id)) {
+      const user = Array.from(users.entries()).find(([socketId]) => socketId === socket.id);
+      
+      if (user) {
         users.delete(socket.id);
-        io.to(room_id).emit("user_list", Array.from(users.values())); // Send updated list
+        io.to(room_id).emit("user_list", Array.from(users.values()));
+        if (users.size === 0) {
+          setTimeout(() => {
+            if (users.size === 0) {
+              activeRooms.delete(room_id);
+            }
+          }, 30000);
+        }
       }
     });
   });
