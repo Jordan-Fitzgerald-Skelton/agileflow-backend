@@ -53,7 +53,7 @@ describe('API Endpoints Tests', () => {
     test('should create a refinement room successfully', async () => {
       //mock a database response
       mockPool.query.mockImplementationOnce(() => {
-        return Promise.resolve({ rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }], rowCount: 1 });
+        return Promise.resolve({ rows: [{ room_id: 'mock-uuid', invite_code: 'abc123', room_type: 'refinement' }], rowCount: 1 });
       });
 
       const response = await request(app)
@@ -67,7 +67,7 @@ describe('API Endpoints Tests', () => {
     });
 
     test('should handle error when creating refinement room fails', async () => {
-      //mocks a database error
+      // mocks a database error
       mockPool.query.mockImplementationOnce(() => {
         return Promise.reject(new Error('Database error'));
       });
@@ -150,7 +150,7 @@ describe('API Endpoints Tests', () => {
   describe('Create Retro Room', () => {
     test('should create a retro room successfully', async () => {
       mockPool.query.mockImplementationOnce(() => {
-        return Promise.resolve({ rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }], rowCount: 1 });
+        return Promise.resolve({ rows: [{ room_id: 'mock-uuid', invite_code: 'abc123', room_type: 'retro' }], rowCount: 1 });
       });
 
       const response = await request(app)

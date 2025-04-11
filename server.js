@@ -73,7 +73,7 @@ const generateUniqueInviteCode = async () => {
   let inviteCode, check;
   do {
     inviteCode = crypto.randomBytes(3).toString("hex");
-    check = await pool.query("SELECT 1 FROM refinement_rooms WHERE invite_code = $1", [inviteCode]);
+    check = await pool.query("SELECT 1 FROM rooms WHERE invite_code = $1", [inviteCode]);
   } while (check.rowCount > 0);
   return inviteCode;
 };
@@ -86,8 +86,8 @@ app.post("/refinement/create/room", async (req, res) => {
       const invite_code = await generateUniqueInviteCode();
       const room_id = uuidv4(); 
       const result = await client.query(
-        "INSERT INTO refinement_rooms (room_id, invite_code, created_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
-        [room_id, invite_code]
+        "INSERT INTO rooms (room_id, invite_code, room_type, created_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
+        [room_id, invite_code, 'refinement']
       );
       return result;
     });  
@@ -129,7 +129,7 @@ app.post("/refinement/join/room", async (req, res) => {
     }
     const result = await executeTransaction(async (client) => {
       const roomResult = await client.query(
-        "SELECT room_id FROM refinement_rooms WHERE invite_code = $1",
+        "SELECT room_id FROM rooms WHERE invite_code = $1 AND room_type = 'refinement'",
         [invite_code]
       );
       if (roomResult.rowCount === 0) {
@@ -166,8 +166,8 @@ app.post("/retro/create/room", async (req, res) => {
       const room_id = uuidv4();
       
       const result = await client.query(
-        "INSERT INTO retro_rooms (room_id, invite_code, created_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
-        [room_id, invite_code]
+        "INSERT INTO rooms (room_id, invite_code, room_type, created_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
+        [room_id, invite_code, 'retro']
       );
       return result;
     });
@@ -209,7 +209,7 @@ app.post("/retro/join/room", async (req, res) => {
     }
     const result = await executeTransaction(async (client) => {
       const roomResult = await client.query(
-        "SELECT room_id FROM retro_rooms WHERE invite_code = $1",
+        "SELECT room_id FROM rooms WHERE invite_code = $1 AND room_type = 'retro'",
         [invite_code]
       );
       if (roomResult.rowCount === 0) {
@@ -405,7 +405,7 @@ io.on("connection", (socket) => {
         return;
       }
       const result = await pool.query(
-        "SELECT room_id FROM refinement_rooms WHERE invite_code = $1 UNION SELECT room_id FROM retro_rooms WHERE invite_code = $1",
+        "SELECT room_id FROM rooms WHERE invite_code = $1",
         [invite_code]
       );    
       if (result.rowCount === 0) {
@@ -427,7 +427,7 @@ io.on("connection", (socket) => {
       console.error("Error in join_room:", error);
       socket.emit("error", { message: "Failed to join room" });
     }
-  });
+  });  
   
   socket.on("submit_prediction", (data) => {
     try {
