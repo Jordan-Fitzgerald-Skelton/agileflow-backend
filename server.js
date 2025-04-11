@@ -9,6 +9,10 @@ const pg = require("pg");
 const nodemailer = require("nodemailer");
 const rateLimit = require("express-rate-limit");
 
+//imports for the utility files (used for testing)
+const { pool, executeTransaction, connectWithRetry } = require('./utils/db');
+const { sendActionNotification } = require('./utils/email');
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { 
@@ -33,41 +37,12 @@ const apiLimiter = rateLimit({
 //add the rate limiting to all the routes
 app.use(apiLimiter);
 
-//database setup
-const pool = new pg.Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
-  max: 20, // Set max pool size
-  idleTimeoutMillis: 30000
-});
-
 //method for handeling errors within the server
 const handleError = (res, error, message = "An error occurred") => {
   console.error(`[${new Date().toISOString()}] Error:`, error);
   return res.status(500).json({ 
     success: false, 
     message: message
-  });
-};
-
-// Database connection with retry
-const connectWithRetry = () => {
-  pool.connect((err, client, release) => {
-    if (err) {
-      console.error('Failed to connect to the database', err);
-      // Retry connection after 5 seconds
-      setTimeout(connectWithRetry, 5000);
-      return;
-    }
-    release();
-    console.log('Successfully connected to PostgreSQL database');
-    pool.on('error', (err) => {
-      console.error('Unexpected database error', err);
-      process.exit(-1);
-    });
   });
 };
 
@@ -101,22 +76,6 @@ const generateUniqueInviteCode = async () => {
     check = await pool.query("SELECT 1 FROM refinement_rooms WHERE invite_code = $1", [inviteCode]);
   } while (check.rowCount > 0);
   return inviteCode;
-};
-
-//This will be used to execute the database queries
-const executeTransaction = async (callback) => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await callback(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
 };
 
 // ========================= Room Management =========================
@@ -560,6 +519,7 @@ io.on("connection", (socket) => {
 });
 
 //for testing
+connectWithRetry();
 module.exports = app;
 
 //only runns when this file is directly called 
