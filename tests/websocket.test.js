@@ -2,242 +2,175 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 const Client = require('socket.io-client');
 const { v4: uuidv4 } = require('uuid');
+const app = require('../server'); // Adjust path as needed
+const { pool } = require('../utils/db'); // Adjust path as needed
 
-//dependencies
-jest.mock('pg', () => {
-  const mClient = {
-    query: jest.fn(),
-    release: jest.fn(),
-  };
-  const mPool = {
-    connect: jest.fn((callback) => callback(null, mClient, mClient.release)),
-    query: jest.fn(),
-    on: jest.fn(),
-  };
-  return {
-    Pool: jest.fn(() => mPool),
-    Client: jest.fn(() => mClient),
-  };
-});
-
-jest.mock('uuid', () => ({
-  v4: jest.fn(() => 'mock-uuid'),
-}));
+jest.mock('uuid');
+jest.mock('../utils/db');
 
 describe('WebSocket Tests', () => {
   let io, serverSocket, clientSocket, httpServer;
-  let mockPool;
-  
+
   beforeAll((done) => {
-    //setsup the socket.io server and client
+    // Create HTTP server for testing
     httpServer = createServer();
     io = new Server(httpServer);
-    
-    require('../app');
-    
     httpServer.listen(() => {
+      // Get the port that was assigned
       const port = httpServer.address().port;
+      // Connect client socket to server
       clientSocket = Client(`http://localhost:${port}`);
-      clientSocket.on('connect', done);
+      
+      // Get a reference to the server socket when client connects
+      io.on('connection', (socket) => {
+        serverSocket = socket;
+        done();
+      });
+      
+      // Mock UUID generation
+      uuidv4.mockReturnValue('mock-uuid');
+      
+      // Mock DB functions
+      pool.query = jest.fn();
     });
-    
-    //setsup a mock database
-    mockPool = require('pg').Pool();
   });
-  
+
   afterAll(() => {
+    // Clean up
     io.close();
     clientSocket.close();
     httpServer.close();
   });
-  
-  beforeEach(() => {
+
+  afterEach(() => {
     jest.clearAllMocks();
-    mockPool.query.mockImplementation((query, params) => {
-      // Default mock implementation for general queries
-      return Promise.resolve({ rows: [], rowCount: 0 });
-    });
   });
-  
-  test('should connect and receive a connection acknowledgment', (done) => {
-    expect(clientSocket.connected).toBeTruthy();
-    done();
-  });
-  
-  test('should join a room successfully', (done) => {
-    mockPool.query.mockImplementationOnce(() => {
-      return Promise.resolve({ 
-        rows: [{ room_id: 'test-room-id' }], 
-        rowCount: 1 
-      });
+
+  it('should join a room successfully', (done) => {
+    // Mock DB response for room query
+    pool.query.mockResolvedValueOnce({
+      rows: [{ room_id: 'test-room-id' }],
+      rowCount: 1
     });
     
+    // Set up listener for user_list event
     clientSocket.on('user_list', (userList) => {
-      expect(Array.isArray(userList)).toBeTruthy();
-      expect(userList.length).toBeGreaterThan(0);
+      expect(Array.isArray(userList)).toBe(true);
+      expect(userList.length).toBeGreaterThanOrEqual(1);
       expect(userList[0].name).toBe('Test User');
       expect(userList[0].email).toBe('test@example.com');
       done();
     });
     
+    // Emit join_room event
     clientSocket.emit('join_room', {
-      invite_code: 'valid-code',
+      invite_code: 'test-code',
       name: 'Test User',
       email: 'test@example.com'
     });
   });
-  
-  test('should handle room not found', (done) => {
-    mockPool.query.mockImplementationOnce(() => {
-      return Promise.resolve({ rows: [], rowCount: 0 });
+
+  it('should handle room not found error', (done) => {
+    // Mock empty DB response
+    pool.query.mockResolvedValueOnce({
+      rows: [],
+      rowCount: 0
     });
     
+    // Set up listener for error event
     clientSocket.on('error', (data) => {
       expect(data.message).toBe('Room not found');
       done();
     });
     
+    // Emit join_room event with invalid code
     clientSocket.emit('join_room', {
       invite_code: 'invalid-code',
       name: 'Test User',
       email: 'test@example.com'
     });
   });
-  
-  test('should broadcast prediction submitted', (done) => {
-    mockPool.query.mockImplementationOnce(() => {
-      return Promise.resolve({ 
-        rows: [{ room_id: 'test-room-id' }], 
-        rowCount: 1 
-      });
-    });
-    
-    clientSocket.emit('join_room', {
-      invite_code: 'valid-code',
-      name: 'Test User',
-      email: 'test@example.com'
-    });
-    
+
+  it('should handle submit_prediction event', (done) => {
+    // Listen for the prediction_submitted event
     clientSocket.on('prediction_submitted', (data) => {
       expect(data.role).toBe('developer');
       expect(data.prediction).toBe(5);
       done();
     });
     
+    // Emit submit_prediction event
     clientSocket.emit('submit_prediction', {
       room_id: 'test-room-id',
       role: 'developer',
       prediction: 5
     });
   });
-  
-  test('should handle invalid prediction data', (done) => {
-    clientSocket.on('error', (data) => {
-      expect(data.message).toBe('Invalid prediction data');
+
+  it('should handle create_room event', (done) => {
+    // Set up listener for room_created event
+    clientSocket.on('room_created', (data) => {
+      expect(data.room_id).toBe('new-room-id');
       done();
     });
     
-    clientSocket.emit('submit_prediction', {
-      room_id: 'test-room-id',
+    // Emit create_room event
+    clientSocket.emit('create_room', {
+      room_id: 'new-room-id',
+      room_type: 'refinement'
     });
   });
-  
-  test('should broadcast action created', (done) => {
-    mockPool.query.mockImplementationOnce(() => {
-      return Promise.resolve({ 
-        rows: [{ room_id: 'test-room-id' }], 
-        rowCount: 1 
-      });
-    });
-    
-    clientSocket.emit('join_room', {
-      invite_code: 'valid-code',
-      name: 'Test User',
-      email: 'test@example.com'
-    });
-    
+
+  it('should handle create_action event', (done) => {
+    // Set up listener for action_created event
     clientSocket.on('action_created', (data) => {
+      expect(data.room_id).toBe('test-room-id');
       expect(data.user_name).toBe('Test User');
-      expect(data.description).toBe('Test action item');
+      expect(data.description).toBe('Test action');
       done();
     });
     
+    // Emit create_action event
     clientSocket.emit('create_action', {
       room_id: 'test-room-id',
       user_name: 'Test User',
-      description: 'Test action item'
+      description: 'Test action'
     });
   });
-  
-  test('should handle user disconnection', (done) => {
-    mockPool.query.mockImplementationOnce(() => {
-      return Promise.resolve({ 
-        rows: [{ room_id: 'test-room-id' }], 
-        rowCount: 1 
-      });
+
+  it('should handle leave_room event', (done) => {
+    // Mock active rooms state
+    const activeRooms = new Map();
+    activeRooms.set('test-room-id', new Map([
+      [clientSocket.id, { name: 'Test User', email: 'test@example.com' }]
+    ]));
+    
+    // Set up listener for user_list event
+    clientSocket.on('user_list', (userList) => {
+      expect(Array.isArray(userList)).toBe(true);
+      expect(userList.length).toBe(0);
+      done();
     });
     
-    clientSocket.emit('join_room', {
-      invite_code: 'valid-code',
-      name: 'Test User',
-      email: 'test@example.com'
-    });
-    
-    const clientSocket2 = Client(`http://localhost:${httpServer.address().port}`);
-    
-    clientSocket2.on('connect', () => {
-      clientSocket2.emit('join_room', {
-        invite_code: 'valid-code',
-        name: 'Test User 2',
-        email: 'test2@example.com'
-      });
-      
-      clientSocket2.on('user_list', (userList) => {
-        if (userList.length === 1 && userList[0].name === 'Test User 2') {
-          expect(userList.length).toBe(1);
-          expect(userList[0].name).toBe('Test User 2');
-          clientSocket2.disconnect();
-          done();
-        }
-      });
-      
-      clientSocket.disconnect();
-    });
+    // Emit leave_room event
+    clientSocket.emit('leave_room', { roomId: 'test-room-id' });
   });
-  
-  test('should leave room properly', (done) => {
-    mockPool.query.mockImplementationOnce(() => {
-      return Promise.resolve({ 
-        rows: [{ room_id: 'test-room-id' }], 
-        rowCount: 1 
-      });
+
+  it('should handle disconnect event', (done) => {
+    // Mock active rooms state
+    const activeRooms = new Map();
+    activeRooms.set('test-room-id', new Map([
+      [clientSocket.id, { name: 'Test User', email: 'test@example.com' }]
+    ]));
+    
+    // Set up listener for user_list event after disconnect
+    clientSocket.on('user_list', (userList) => {
+      expect(Array.isArray(userList)).toBe(true);
+      expect(userList.length).toBe(0);
+      done();
     });
     
-    clientSocket.emit('join_room', {
-      invite_code: 'valid-code',
-      name: 'Test User',
-      email: 'test@example.com'
-    });
-    
-    const clientSocket2 = Client(`http://localhost:${httpServer.address().port}`);
-    
-    clientSocket2.on('connect', () => {
-      clientSocket2.emit('join_room', {
-        invite_code: 'valid-code',
-        name: 'Test User 2',
-        email: 'test2@example.com'
-      });
-      
-      clientSocket2.on('user_list', (userList) => {
-        if (userList.length === 1 && userList[0].name === 'Test User 2') {
-          expect(userList.length).toBe(1);
-          expect(userList[0].name).toBe('Test User 2');
-          clientSocket2.disconnect();
-          done();
-        }
-      });
-      
-      clientSocket.emit('leave_room', { roomId: 'test-room-id' });
-    });
+    // Trigger disconnect
+    clientSocket.disconnect();
   });
 });

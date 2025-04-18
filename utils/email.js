@@ -8,14 +8,6 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-/**
- * Send an email notification for an action item
- * @param {Object} options
- * @param {string} options.email - Recipient email address
- * @param {string} options.userName - User's name
- * @param {string} options.description - Action item description
- * @returns {Promise<void>}
- */
 const sendActionNotification = async ({ email, userName, description }) => {
   return new Promise((resolve) => {
     const mailOptions = {

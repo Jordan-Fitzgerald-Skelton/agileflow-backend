@@ -1,10 +1,15 @@
 const nodemailer = require('nodemailer');
 
+// Mock for nodemailer
+const mockSendMail = jest.fn((mailOptions, callback) => callback(null, { response: 'Email sent' }));
+const mockTransport = { sendMail: mockSendMail };
+
 jest.mock('nodemailer', () => ({
-  createTransport: jest.fn(() => ({
-    sendMail: jest.fn((mailOptions, callback) => callback(null, { response: 'Email sent' })),
-  })),
+  createTransport: jest.fn(() => mockTransport)
 }));
+
+// Mock for console.error
+console.error = jest.fn();
 
 const { sendActionNotification } = require('../utils/email');
 
@@ -14,15 +19,13 @@ describe('Email Notification Tests', () => {
   });
   
   test('should send action notification email', async () => {
-    const mockTransport = nodemailer.createTransport();
-    
     await sendActionNotification({
       email: 'test@example.com',
       userName: 'Test User',
       description: 'Complete this task'
     });
     
-    expect(mockTransport.sendMail).toHaveBeenCalledWith(
+    expect(mockSendMail).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'test@example.com',
         subject: expect.stringContaining('Action Item'),
@@ -35,19 +38,19 @@ describe('Email Notification Tests', () => {
   test('should handle email sending failure', async () => {
     const mockError = new Error('Email sending failed');
     
-    const mockTransport = nodemailer.createTransport();
-    mockTransport.sendMail.mockImplementationOnce((mailOptions, callback) => {
+    // Reset the implementation for this test
+    mockSendMail.mockImplementationOnce((mailOptions, callback) => {
       callback(mockError, null);
     });
     
-    await expect(sendActionNotification({
+    await sendActionNotification({
       email: 'test@example.com',
       userName: 'Test User',
       description: 'Complete this task'
-    })).resolves.not.toThrow();
+    });
     
     expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('Error sending email'),
+      "Error sending email:",
       mockError
     );
   });

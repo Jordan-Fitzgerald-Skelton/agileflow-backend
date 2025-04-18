@@ -5,8 +5,6 @@ const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
 const cors = require("cors");
-const pg = require("pg");
-const nodemailer = require("nodemailer");
 const rateLimit = require("express-rate-limit");
 
 //imports for the utility files (used for testing)
@@ -58,15 +56,6 @@ app.use((req, res, next) => {
 
 //temporary table
 const TEMP_TABLE = "refinement_predictions";
-
-//email setup
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.APP_EMAIL,
-    pass: process.env.APP_PASS,
-  },
-});
 
 //generatea a unique invite code
 const generateUniqueInviteCode = async () => {
@@ -361,19 +350,10 @@ app.post("/retro/create/action", async (req, res) => {
       );
       return { email };
     });
-    //send the email
-    const mailOptions = {
-      from: process.env.APP_EMAIL,
-      to: result.email,
-      subject: "New Action Item Assigned",
-      text: `Hello ${user_name},\n\nYou have been assigned a new action item:\n\n${description}\n\nBest Regards,\nAgileFlow Team`,
-    };
-    transporter.sendMail(mailOptions, (err, info) => {
-      if (err) {
-        console.error("Error sending email:", err);
-      } else {
-        console.log("Email sent:", info.response);
-      }
+    await sendActionNotification({
+      email: result.email,
+      userName: user_name,
+      description: description
     });
     io.to(room_id).emit("action_added", { user_name, description });
     res.json({ 
