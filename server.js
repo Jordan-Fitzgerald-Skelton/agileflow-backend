@@ -328,43 +328,53 @@ app.post("/retro/new/comment", async (req, res) => {
 //creating action items
 app.post("/retro/create/action", async (req, res) => {
   try {
-    const { room_id, user_name, description } = req.body;
+    const { room_id, user_name, description, assignee_name } = req.body;
+    const assignedTo = assignee_name || user_name;
+    
     if (!room_id || !user_name || !description) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields"
       });
     }
+    
     const result = await executeTransaction(async (client) => {
       const userResult = await client.query(
         "SELECT email FROM room_users WHERE room_id = $1 AND name = $2",
-        [room_id, user_name]
+        [room_id, assignedTo]
       );
+      
       if (userResult.rowCount === 0) {
-        throw new Error("User not found in the room");
+        throw new Error("Assigned user not found in the room");
       }
+      
       const email = userResult.rows[0].email;
+      
       await client.query(
         "INSERT INTO retro_actions (room_id, user_name, description) VALUES ($1, $2, $3)",
-        [room_id, user_name, description]
+        [room_id, assignedTo, description]
       );
+      
       return { email };
     });
+    
     await sendActionNotification({
       email: result.email,
-      userName: user_name,
+      userName: assignedTo,
       description: description
     });
-    io.to(room_id).emit("action_added", { user_name, description });
+    
+    io.to(room_id).emit("action_added", { user_name: assignedTo, description });
+    
     res.json({ 
       success: true,
       message: "Action created and email sent successfully" 
     });
   } catch (error) {
-    if (error.message === "User not found in the room") {
+    if (error.message === "Assigned user not found in the room") {
       return res.status(400).json({ 
         success: false, 
-        message: "User not found in the room" 
+        message: "Assigned user not found in the room" 
       });
     }
     return handleError(res, error, "Failed to create action item");
