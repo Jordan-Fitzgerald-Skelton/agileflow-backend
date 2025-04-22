@@ -511,6 +511,7 @@ io.on("connection", (socket) => {
 //for testing
 connectWithRetry();
 module.exports = app;
+module.exports = server;
 
 //only runns when this file is directly called 
 if (require.main === module) {

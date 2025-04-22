@@ -84,13 +84,21 @@ jest.mock('crypto', () => {
 
 // Load the server
 const app = require('../server');
-const { executeTransaction } = require('../utils/db');
+const { pool, executeTransaction } = require('../utils/db');
 
 describe('API Endpoints Tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     
-    // Reset the mock implementation for executeTransaction
+    // Mock pool.query to return proper result for invite code checking
+    pool.query.mockImplementation((query) => {
+      if (query.includes('SELECT 1 FROM rooms WHERE invite_code')) {
+        return { rowCount: 0 }; // Makes generateUniqueInviteCode succeed on first try
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    
+    // Reset executeTransaction mock
     executeTransaction.mockImplementation(async (callback) => {
       const mockClient = {
         query: jest.fn()
@@ -104,18 +112,26 @@ describe('API Endpoints Tests', () => {
   describe('Create Refinement Room', () => {
     test('should create a refinement room successfully', async () => {
       // Mock the executeTransaction to return successful result
+      const mockQueryResult = {
+        rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }],
+        rowCount: 1
+      };
+      
       executeTransaction.mockImplementationOnce(async (callback) => {
         const mockClient = {
-          query: jest.fn().mockResolvedValueOnce({
-            rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }],
-            rowCount: 1
-          })
+          query: jest.fn().mockResolvedValueOnce(mockQueryResult)
         };
-        return await callback(mockClient);
+        await callback(mockClient);
+        return mockQueryResult;
       });
-
+    
+      // Make sure pool.query is properly mocked for generateUniqueInviteCode
+      pool.query.mockImplementationOnce(() => {
+        return { rowCount: 0 }; // Make invite code unique on first try
+      });
+    
       const response = await request(app).post("/refinement/create/room");
-
+    
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
       expect(response.body.room_id).toBe('mock-uuid');
@@ -212,21 +228,28 @@ describe('API Endpoints Tests', () => {
 
   describe('Create Retro Room', () => {
     test('should create a retro room successfully', async () => {
-      // Mock executeTransaction for successful retro room creation
+      const mockQueryResult = {
+        rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }],
+        rowCount: 1
+      };
+      
       executeTransaction.mockImplementationOnce(async (callback) => {
         const mockClient = {
-          query: jest.fn().mockResolvedValueOnce({
-            rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }],
-            rowCount: 1
-          })
+          query: jest.fn().mockResolvedValueOnce(mockQueryResult)
         };
-        return await callback(mockClient);
+        await callback(mockClient);
+        return mockQueryResult;
       });
-
+    
+      // Make sure pool.query is properly mocked for generateUniqueInviteCode
+      pool.query.mockImplementationOnce(() => {
+        return { rowCount: 0 }; // Make invite code unique on first try
+      });
+    
       const response = await request(app)
         .post('/retro/create/room')
         .send({});
-
+    
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
       expect(response.body.room_id).toBe('mock-uuid');
