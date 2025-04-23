@@ -17,7 +17,7 @@ jest.mock('../utils/db', () => {
       // Mock the transaction and return the result of the callback
       return await callback(mockClient);
     }),
-    connectWithRetry: jest.fn()
+    retryConnection: jest.fn()
   };
 });
 

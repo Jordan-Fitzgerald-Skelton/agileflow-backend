@@ -1,20 +1,24 @@
 const { Pool } = require('pg');
 
-//database setup
+//connect and create the database pool 
 const pool = new Pool({
   user: process.env.DB_USER,
   host: process.env.DB_HOST,
   database: process.env.DB_NAME,
   password: process.env.DB_PASSWORD,
   port: process.env.DB_PORT,
+  //only 20 connections
   max: 20,
+  //will remove the connection 
   idleTimeoutMillis: 30000
 });
 
+//executes the queries from the server, rolls backe when there are erros and 
+//executes the query when it succeeds 
 const executeTransaction = async (callback) => {
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query('START');
     const result = await callback(client);
     await client.query('COMMIT');
     return result;
@@ -26,11 +30,12 @@ const executeTransaction = async (callback) => {
   }
 };
 
-const connectWithRetry = () => {
+const retryConnection = () => {
   pool.connect((err, client, release) => {
     if (err) {
       console.error('Failed to connect to the database', err);
-      setTimeout(connectWithRetry, 5000);
+      //will retry the connection evry 5 secons 
+      setTimeout(retryConnection, 5000); 
       return;
     }
     release();
@@ -42,8 +47,9 @@ const connectWithRetry = () => {
   });
 };
 
+//exports everything for the server
 module.exports = {
   pool,
   executeTransaction,
-  connectWithRetry
+  retryConnection
 };
