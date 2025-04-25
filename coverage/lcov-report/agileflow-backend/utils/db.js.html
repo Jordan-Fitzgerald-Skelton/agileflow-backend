@@ -172,7 +172,7 @@ const pool = new Pool({
   idleTimeoutMillis: 30000
 });
 &nbsp;
-const executeTransaction = async (callback) =&gt; {
+const runQuery = async (callback) =&gt; {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -205,7 +205,7 @@ const retryConnection = () =&gt; {
 &nbsp;
 module.exports = {
   pool,
-  executeTransaction,
+  runQuery,
   retryConnection
 };</pre></td></tr></table></pre>
 

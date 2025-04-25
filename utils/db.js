@@ -15,7 +15,7 @@ const pool = new Pool({
 
 //executes the queries from the server, rolls backe when there are erros and 
 //executes the query when it succeeds 
-const executeTransaction = async (callback) => {
+const runQuery = async (callback) => {
   const client = await pool.connect();
   try {
     await client.query('START');
@@ -50,6 +50,6 @@ const retryConnection = () => {
 //exports everything for the server
 module.exports = {
   pool,
-  executeTransaction,
+  runQuery,
   retryConnection
 };

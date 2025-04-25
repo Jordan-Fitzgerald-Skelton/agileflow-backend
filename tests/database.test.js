@@ -1,4 +1,4 @@
-const { executeTransaction } = require('../utils/db');
+const { runQuery } = require('../utils/db');
 const pg = require('pg');
 
 // Create proper mocks that simulate how pg works
@@ -49,7 +49,7 @@ describe('Database Transaction Tests', () => {
       return { result: 'success' };
     });
     
-    const result = await executeTransaction(callback);
+    const result = await runQuery(callback);
     
     expect(mockClient.query).toHaveBeenCalledWith('BEGIN');
     expect(callback).toHaveBeenCalledWith(mockClient);
@@ -69,7 +69,7 @@ describe('Database Transaction Tests', () => {
     const testError = new Error('Test error');
     const callback = jest.fn(() => Promise.reject(testError));
     
-    await expect(executeTransaction(callback)).rejects.toThrow('Test error');
+    await expect(runQuery(callback)).rejects.toThrow('Test error');
     
     expect(mockClient.query).toHaveBeenCalledWith('BEGIN');
     expect(callback).toHaveBeenCalledWith(mockClient);
@@ -92,7 +92,7 @@ describe('Database Transaction Tests', () => {
     
     const callback = jest.fn(() => Promise.resolve({ result: 'success' }));
     
-    await expect(executeTransaction(callback)).rejects.toThrow('Commit failed');
+    await expect(runQuery(callback)).rejects.toThrow('Commit failed');
     expect(commitQuery).toBe(true);
     expect(mockClient.release).toHaveBeenCalled();
   });

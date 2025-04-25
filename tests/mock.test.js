@@ -9,7 +9,7 @@ jest.mock('../utils/db', () => {
       connect: jest.fn(),
       on: jest.fn()
     },
-    executeTransaction: jest.fn(async (callback) => {
+    runQuery: jest.fn(async (callback) => {
       // Simulate client with query method
       const mockClient = {
         query: jest.fn()
@@ -84,7 +84,7 @@ jest.mock('crypto', () => {
 
 // Load the server
 const app = require('../server');
-const { pool, executeTransaction } = require('../utils/db');
+const { pool, runQuery } = require('../utils/db');
 
 describe('API Endpoints Tests', () => {
   beforeEach(() => {
@@ -93,13 +93,13 @@ describe('API Endpoints Tests', () => {
     // Mock pool.query to return proper result for invite code checking
     pool.query.mockImplementation((query) => {
       if (query.includes('SELECT 1 FROM rooms WHERE invite_code')) {
-        return { rowCount: 0 }; // Makes generateUniqueInviteCode succeed on first try
+        return { rowCount: 0 }; // Makes inviteCode succeed on first try
       }
       return { rows: [], rowCount: 0 };
     });
     
-    // Reset executeTransaction mock
-    executeTransaction.mockImplementation(async (callback) => {
+    // Reset runQuery mock
+    runQuery.mockImplementation(async (callback) => {
       const mockClient = {
         query: jest.fn()
       };
@@ -111,13 +111,13 @@ describe('API Endpoints Tests', () => {
 
   describe('Create Refinement Room', () => {
     test('should create a refinement room successfully', async () => {
-      // Mock the executeTransaction to return successful result
+      // Mock the runQuery to return successful result
       const mockQueryResult = {
         rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }],
         rowCount: 1
       };
       
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce(mockQueryResult)
         };
@@ -125,7 +125,7 @@ describe('API Endpoints Tests', () => {
         return mockQueryResult;
       });
     
-      // Make sure pool.query is properly mocked for generateUniqueInviteCode
+      // Make sure pool.query is properly mocked for inviteCode
       pool.query.mockImplementationOnce(() => {
         return { rowCount: 0 }; // Make invite code unique on first try
       });
@@ -139,8 +139,8 @@ describe('API Endpoints Tests', () => {
     });
 
     test('should handle error when creating refinement room fails', async () => {
-      // Mock executeTransaction to throw an error
-      executeTransaction.mockImplementationOnce(() => {
+      // Mock runQuery to throw an error
+      runQuery.mockImplementationOnce(() => {
         throw new Error('Database error');
       });
 
@@ -153,8 +153,8 @@ describe('API Endpoints Tests', () => {
 
   describe('Join Refinement Room', () => {
     test('should join a refinement room successfully', async () => {
-      // Mock executeTransaction for successful room join
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for successful room join
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn()
             .mockResolvedValueOnce({ rows: [{ room_id: 'mock-uuid' }], rowCount: 1 })
@@ -177,8 +177,8 @@ describe('API Endpoints Tests', () => {
     });
 
     test('should return error with invalid invite code', async () => {
-      // Mock executeTransaction for invalid invite code
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for invalid invite code
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 })
         };
@@ -233,7 +233,7 @@ describe('API Endpoints Tests', () => {
         rowCount: 1
       };
       
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce(mockQueryResult)
         };
@@ -241,7 +241,7 @@ describe('API Endpoints Tests', () => {
         return mockQueryResult;
       });
     
-      // Make sure pool.query is properly mocked for generateUniqueInviteCode
+      // Make sure pool.query is properly mocked for inviteCode
       pool.query.mockImplementationOnce(() => {
         return { rowCount: 0 }; // Make invite code unique on first try
       });
@@ -257,8 +257,8 @@ describe('API Endpoints Tests', () => {
     });
 
     test('should handle error when creating retro room fails', async () => {
-      // Mock executeTransaction to throw an error
-      executeTransaction.mockImplementationOnce(() => {
+      // Mock runQuery to throw an error
+      runQuery.mockImplementationOnce(() => {
         throw new Error('Database error');
       });
 
@@ -273,8 +273,8 @@ describe('API Endpoints Tests', () => {
 
   describe('Join Retro Room', () => {
     test('should join a retro room successfully', async () => {
-      // Mock executeTransaction for successful retro room join
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for successful retro room join
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn()
             .mockResolvedValueOnce({ rows: [{ room_id: 'mock-uuid' }], rowCount: 1 })
@@ -297,8 +297,8 @@ describe('API Endpoints Tests', () => {
     });
 
     test('should return error with invalid invite code', async () => {
-      // Mock executeTransaction for invalid invite code
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for invalid invite code
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 })
         };
@@ -323,8 +323,8 @@ describe('API Endpoints Tests', () => {
 
   describe('Submit Prediction', () => {
     test('should submit prediction successfully', async () => {
-      // Mock executeTransaction for successful prediction submission
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for successful prediction submission
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rowCount: 1 })
         };
@@ -371,8 +371,8 @@ describe('API Endpoints Tests', () => {
 
   describe('Get Predictions', () => {
     test('should get predictions successfully', async () => {
-      // Mock executeTransaction for successful predictions retrieval
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for successful predictions retrieval
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn()
             .mockResolvedValueOnce({
@@ -412,8 +412,8 @@ describe('API Endpoints Tests', () => {
 
   describe('Add Retro Comment', () => {
     test('should add comment successfully', async () => {
-      // Mock executeTransaction for successful comment addition
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for successful comment addition
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rowCount: 1 })
         };
@@ -449,8 +449,8 @@ describe('API Endpoints Tests', () => {
     });
 
     test('should sanitize HTML in comments', async () => {
-      // Mock executeTransaction for successful comment addition
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for successful comment addition
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rowCount: 1 })
         };
@@ -477,8 +477,8 @@ describe('API Endpoints Tests', () => {
 
   describe('Create Action Item', () => {
     test('should create action item successfully', async () => {
-      // Mock executeTransaction for successful action item creation
-      executeTransaction.mockImplementationOnce(async (callback) => {
+      // Mock runQuery for successful action item creation
+      runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn()
             .mockResolvedValueOnce({
@@ -517,8 +517,8 @@ describe('API Endpoints Tests', () => {
     });
 
     test('should return error when user not found', async () => {
-      // Mock executeTransaction for user not found scenario
-      executeTransaction.mockImplementationOnce(() => {
+      // Mock runQuery for user not found scenario
+      runQuery.mockImplementationOnce(() => {
         throw new Error("Assigned user not found in the room");
       });
 

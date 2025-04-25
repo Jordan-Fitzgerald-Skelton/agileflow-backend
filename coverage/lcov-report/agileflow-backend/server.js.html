@@ -1113,7 +1113,7 @@ const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 &nbsp;
 //imports for the utility files (used for testing)
-const { pool, executeTransaction, retryConnection } = require('./utils/db');
+const { pool, runQuery, retryConnection } = require('./utils/db');
 const { sendActionNotification } = require('./utils/email');
 &nbsp;
 const app = express();
@@ -1163,7 +1163,7 @@ app.use((req, res, next) =&gt; {
 const TEMP_TABLE = "refinement_predictions";
 &nbsp;
 //generatea a unique invite code
-const generateUniqueInviteCode = async () =&gt; {
+const inviteCode = async () =&gt; {
   let inviteCode, check;
   do {
     inviteCode = crypto.randomBytes(3).toString("hex");
@@ -1176,8 +1176,8 @@ const generateUniqueInviteCode = async () =&gt; {
 //create a refinement room
 app.post("/refinement/create/room", async (req, res) =&gt; {
   try {
-    const result = await executeTransaction(async (client) =&gt; {
-      const invite_code = await generateUniqueInviteCode();
+    const result = await runQuery(async (client) =&gt; {
+      const invite_code = await inviteCode();
       const room_id = uuidv4(); 
       const result = await client.query(
         "INSERT INTO rooms (room_id, invite_code, room_type, created_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
@@ -1221,7 +1221,7 @@ app.post("/refinement/join/room", async (req, res) =&gt; {
         message: "Invalid email format"
       });
     }
-    const result = await executeTransaction(async (client) =&gt; {
+    const result = await runQuery(async (client) =&gt; {
       const roomResult = await client.query(
         "SELECT room_id FROM rooms WHERE invite_code = $1 AND room_type = 'refinement'",
         [invite_code]
@@ -1255,8 +1255,8 @@ app.post("/refinement/join/room", async (req, res) =&gt; {
 //create a retro room
 app.post("/retro/create/room", async (req, res) =&gt; {
   try {
-    const result = await executeTransaction(async (client) =&gt; {
-      const invite_code = await generateUniqueInviteCode();
+    const result = await runQuery(async (client) =&gt; {
+      const invite_code = await inviteCode();
       const room_id = uuidv4();
       
       const result = await client.query(
@@ -1301,7 +1301,7 @@ app.post("/retro/join/room", async (req, res) =&gt; {
         message: "Invalid email format"
       });
     }
-    const result = await executeTransaction(async (client) =&gt; {
+    const result = await runQuery(async (client) =&gt; {
       const roomResult = await client.query(
         "SELECT room_id FROM rooms WHERE invite_code = $1 AND room_type = 'retro'",
         [invite_code]
@@ -1344,7 +1344,7 @@ app.post("/refinement/prediction/submit", async (req, res) =&gt; {
     });
   }
   try {
-    await executeTransaction(async (client) =&gt; {
+    await runQuery(async (client) =&gt; {
       await client.query(
         `INSERT INTO ${TEMP_TABLE} (room_id, role, prediction, created_at)
          VALUES ($1, $2, $3, NOW())
@@ -1371,7 +1371,7 @@ app.get("/refinement/get/predictions", async (req, res) =&gt; {
     });
   }
   try {
-    const result = await executeTransaction(async (client) =&gt; {
+    const result = await runQuery(async (client) =&gt; {
       const predictionResult = await client.query(
         `SELECT role, AVG(prediction) AS final_prediction 
          FROM ${TEMP_TABLE} 
@@ -1413,7 +1413,7 @@ app.post("/retro/new/comment", async (req, res) =&gt; {
     //sanitises the comment
     const sanitizedComment = comment.replace(/&lt;/g, "&amp;lt;").replace(/&gt;/g, "&amp;gt;");
     //stores the comment in the database
-    await executeTransaction(async (client) =&gt; {
+    await runQuery(async (client) =&gt; {
       await client.query(
         "INSERT INTO retro_comments (room_id, comment, created_at) VALUES ($1, $2, NOW())",
         [room_id, sanitizedComment]
@@ -1443,7 +1443,7 @@ app.post("/retro/create/action", async (req, res) =&gt; {
       });
     }
     
-    const result = await executeTransaction(async (client) =&gt; {
+    const result = await runQuery(async (client) =&gt; {
       const userResult = await client.query(
         "SELECT email FROM room_users WHERE room_id = $1 AND name = $2",
         [room_id, assignedTo]
