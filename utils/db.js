@@ -18,7 +18,7 @@ const pool = new Pool({
 const runQuery = async (callback) => {
   const client = await pool.connect();
   try {
-    await client.query('START');
+    await client.query('BEGIN');
     const result = await callback(client);
     await client.query('COMMIT');
     return result;
