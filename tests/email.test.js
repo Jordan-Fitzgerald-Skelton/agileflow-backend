@@ -1,6 +1,5 @@
-const nodemailer = require('nodemailer');
+const nodemailer = require("nodemailer");
 
-// Mock for nodemailer
 const mockSendMail = jest.fn((mailOptions, callback) => callback(null, { response: 'Email sent' }));
 const mockTransport = { sendMail: mockSendMail };
 
@@ -8,17 +7,16 @@ jest.mock('nodemailer', () => ({
   createTransport: jest.fn(() => mockTransport)
 }));
 
-// Mock for console.error
 console.error = jest.fn();
 
-const { sendActionNotification } = require('../utils/email');
+const { sendActionNotification } = require("../utils/email");
 
-describe('Email Notification Tests', () => {
+describe("Email tests", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
   
-  test('should send action notification email', async () => {
+  test("should send action email", async () => {
     await sendActionNotification({
       email: 'test@example.com',
       userName: 'Test User',
@@ -35,10 +33,10 @@ describe('Email Notification Tests', () => {
     );
   });
   
-  test('should handle email sending failure', async () => {
+  test("should handle email sending failure", async () => {
     const mockError = new Error('Email sending failed');
     
-    // Reset the implementation for this test
+    //reset for this test
     mockSendMail.mockImplementationOnce((mailOptions, callback) => {
       callback(mockError, null);
     });

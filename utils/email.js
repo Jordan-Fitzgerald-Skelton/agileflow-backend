@@ -29,7 +29,7 @@ const sendActionNotification = async ({ email, userName, description }) => {
   });
 };
 
-//exports everything for the server
+//exports everything to the server
 module.exports = {
   transporter,
   sendActionNotification

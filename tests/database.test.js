@@ -1,30 +1,26 @@
-const { runQuery } = require('../utils/db');
-const pg = require('pg');
+const { runQuery } = require("../utils/db");
+const pg = require("pg");
 
-// Create proper mocks that simulate how pg works
 jest.mock('pg', () => {
   const mockClient = {
     query: jest.fn(),
     release: jest.fn()
   };
-  
   const mockPool = {
     connect: jest.fn(() => Promise.resolve(mockClient))
   };
-  
   return { 
     Pool: jest.fn(() => mockPool)
   };
 });
 
-describe('Database Transaction Tests', () => {
+describe("Database tests", () => {
   let mockClient;
   let mockPool;
   
   beforeEach(() => {
     jest.clearAllMocks();
     
-    // Get references to the mocks created by Jest
     mockPool = require('pg').Pool();
     mockClient = { 
       query: jest.fn(),
@@ -33,18 +29,15 @@ describe('Database Transaction Tests', () => {
     mockPool.connect.mockResolvedValue(mockClient);
   });
   
-  test('should commit transaction on success', async () => {
-    // Mock the client's query method to return what we want
+  test("should commit when the query is successful", async () => {
     mockClient.query.mockImplementation((query) => {
       if (query === 'BEGIN' || query === 'COMMIT') {
         return Promise.resolve();
       }
-      // For custom queries in the callback
       return Promise.resolve({ rows: [{ result: 'success' }] });
     });
     
     const callback = jest.fn(async (client) => {
-      // Simulate a successful query
       await client.query('SELECT * FROM test');
       return { result: 'success' };
     });
@@ -58,7 +51,7 @@ describe('Database Transaction Tests', () => {
     expect(result).toEqual({ result: 'success' });
   });
   
-  test('should rollback transaction on error', async () => {
+  test("should rollback when an error occures", async () => {
     mockClient.query.mockImplementation((query) => {
       if (query === 'BEGIN' || query === 'ROLLBACK') {
         return Promise.resolve();
@@ -77,7 +70,7 @@ describe('Database Transaction Tests', () => {
     expect(mockClient.release).toHaveBeenCalled();
   });
   
-  test('should release client even if commit fails', async () => {
+  test("should release client if the commit fails", async () => {
     let commitQuery = false;
     mockClient.query.mockImplementation((query) => {
       if (query === 'BEGIN') {

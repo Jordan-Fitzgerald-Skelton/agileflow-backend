@@ -1,8 +1,7 @@
-const request = require('supertest');
-const { v4: uuidv4 } = require('uuid');
+const request = require("supertest");
+const { v4: uuidv4 } = require("uuid");
 
-// Mock the database module
-jest.mock('../utils/db', () => {
+jest.mock("../utils/db", () => {
   return {
     pool: {
       query: jest.fn(),
@@ -10,19 +9,16 @@ jest.mock('../utils/db', () => {
       on: jest.fn()
     },
     runQuery: jest.fn(async (callback) => {
-      // Simulate client with query method
       const mockClient = {
         query: jest.fn()
       };
-      // Mock the transaction and return the result of the callback
       return await callback(mockClient);
     }),
     retryConnection: jest.fn()
   };
 });
 
-// Mock the email module
-jest.mock('../utils/email', () => {
+jest.mock("../utils/email", () => {
   return {
     sendActionNotification: jest.fn().mockResolvedValue(true),
     transporter: {
@@ -31,11 +27,10 @@ jest.mock('../utils/email', () => {
   };
 });
 
-jest.mock('uuid', () => ({
-  v4: jest.fn(() => 'mock-uuid'),
+jest.mock("uuid", () => ({
+  v4: jest.fn(() => "mock-uuid"),
 }));
 
-// Socket.io mock with all required methods
 jest.mock('socket.io', () => {
   const mockOn = jest.fn();
   const mockEmit = jest.fn();
@@ -43,7 +38,6 @@ jest.mock('socket.io', () => {
   const mockJoin = jest.fn();
   const mockLeave = jest.fn();
   
-  // Mock socket object
   const mockSocket = {
     id: 'mock-socket-id',
     join: mockJoin,
@@ -52,53 +46,46 @@ jest.mock('socket.io', () => {
     emit: mockEmit
   };
 
-  // When io.on('connection', handler) is called, execute the handler with the mock socket
   mockOn.mockImplementation((event, handler) => {
     if (event === 'connection') {
       handler(mockSocket);
     }
     return mockSocket;
   });
-  
   const mockIo = {
     on: mockOn,
     to: mockTo,
     emit: mockEmit
   };
-  
   return {
     Server: jest.fn().mockImplementation(() => mockIo)
   };
 });
 
-// Required before importing the app
-const crypto = require('crypto');
-jest.mock('crypto', () => {
+const crypto = require("crypto");
+jest.mock("crypto", () => {
   return {
-    ...jest.requireActual('crypto'),
+    ...jest.requireActual("crypto"),
     randomBytes: jest.fn().mockReturnValue({
       toString: jest.fn().mockReturnValue('abc123')
     })
   };
 });
 
-// Load the server
-const app = require('../server');
-const { pool, runQuery } = require('../utils/db');
+const app = require("../server");
+const { pool, runQuery } = require("../utils/db");
 
-describe('API Endpoints Tests', () => {
+describe("Mock endpoint tests", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    
-    // Mock pool.query to return proper result for invite code checking
+
     pool.query.mockImplementation((query) => {
       if (query.includes('SELECT 1 FROM rooms WHERE invite_code')) {
-        return { rowCount: 0 }; // Makes inviteCode succeed on first try
+        return { rowCount: 0 };
       }
       return { rows: [], rowCount: 0 };
     });
     
-    // Reset runQuery mock
     runQuery.mockImplementation(async (callback) => {
       const mockClient = {
         query: jest.fn()
@@ -107,11 +94,8 @@ describe('API Endpoints Tests', () => {
     });
   });
 
-  // ========================= Room Management Tests =========================
-
-  describe('Create Refinement Room', () => {
-    test('should create a refinement room successfully', async () => {
-      // Mock the runQuery to return successful result
+  describe("create a refinement room", () => {
+    test("should create a refinement room successfully", async () => {
       const mockQueryResult = {
         rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }],
         rowCount: 1
@@ -124,10 +108,9 @@ describe('API Endpoints Tests', () => {
         await callback(mockClient);
         return mockQueryResult;
       });
-    
-      // Make sure pool.query is properly mocked for inviteCode
+
       pool.query.mockImplementationOnce(() => {
-        return { rowCount: 0 }; // Make invite code unique on first try
+        return { rowCount: 0 };
       });
     
       const response = await request(app).post("/refinement/create/room");
@@ -138,7 +121,7 @@ describe('API Endpoints Tests', () => {
       expect(response.body.invite_code).toBe('abc123');
     });
 
-    test('should handle error when creating refinement room fails', async () => {
+    test("creating a refinement room fails correctly", async () => {
       // Mock runQuery to throw an error
       runQuery.mockImplementationOnce(() => {
         throw new Error('Database error');
@@ -151,9 +134,8 @@ describe('API Endpoints Tests', () => {
     });
   });
 
-  describe('Join Refinement Room', () => {
-    test('should join a refinement room successfully', async () => {
-      // Mock runQuery for successful room join
+  describe("joining a refinement room", () => {
+    test("join a refinement room successfully", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn()
@@ -176,8 +158,7 @@ describe('API Endpoints Tests', () => {
       expect(response.body.room_id).toBe('mock-uuid');
     });
 
-    test('should return error with invalid invite code', async () => {
-      // Mock runQuery for invalid invite code
+    test("invalid invite code", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 })
@@ -199,19 +180,18 @@ describe('API Endpoints Tests', () => {
       expect(response.body.message).toContain('Invalid invite code');
     });
 
-    test('should return error with missing fields', async () => {
+    test("error with missing parmeters", async () => {
       const response = await request(app)
         .post('/refinement/join/room')
         .send({
           invite_code: 'abc123',
-          //missing name and email
         });
 
       expect(response.status).toBe(400);
       expect(response.body.success).toBe(false);
     });
 
-    test('should return error with invalid email', async () => {
+    test("error with an invalid email", async () => {
       const response = await request(app)
         .post('/refinement/join/room')
         .send({
@@ -226,8 +206,8 @@ describe('API Endpoints Tests', () => {
     });
   });
 
-  describe('Create Retro Room', () => {
-    test('should create a retro room successfully', async () => {
+  describe("creating a retro room", () => {
+    test("create a retro room successfully", async () => {
       const mockQueryResult = {
         rows: [{ room_id: 'mock-uuid', invite_code: 'abc123' }],
         rowCount: 1
@@ -241,9 +221,8 @@ describe('API Endpoints Tests', () => {
         return mockQueryResult;
       });
     
-      // Make sure pool.query is properly mocked for inviteCode
       pool.query.mockImplementationOnce(() => {
-        return { rowCount: 0 }; // Make invite code unique on first try
+        return { rowCount: 0 };
       });
     
       const response = await request(app)
@@ -256,8 +235,7 @@ describe('API Endpoints Tests', () => {
       expect(response.body.invite_code).toBe('abc123');
     });
 
-    test('should handle error when creating retro room fails', async () => {
-      // Mock runQuery to throw an error
+    test("error when creating a retro room fails", async () => {
       runQuery.mockImplementationOnce(() => {
         throw new Error('Database error');
       });
@@ -271,9 +249,8 @@ describe('API Endpoints Tests', () => {
     });
   });
 
-  describe('Join Retro Room', () => {
-    test('should join a retro room successfully', async () => {
-      // Mock runQuery for successful retro room join
+  describe("joining a retro room", () => {
+    test("join a retro room successfully", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn()
@@ -296,8 +273,7 @@ describe('API Endpoints Tests', () => {
       expect(response.body.room_id).toBe('mock-uuid');
     });
 
-    test('should return error with invalid invite code', async () => {
-      // Mock runQuery for invalid invite code
+    test("invalid invite code", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 })
@@ -319,11 +295,8 @@ describe('API Endpoints Tests', () => {
     });
   });
 
-  // ========================= Predictions Tests =========================
-
-  describe('Submit Prediction', () => {
-    test('should submit prediction successfully', async () => {
-      // Mock runQuery for successful prediction submission
+  describe('prediction tests', () => {
+    test("submit a prediction successfully", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rowCount: 1 })
@@ -343,7 +316,7 @@ describe('API Endpoints Tests', () => {
       expect(response.body.success).toBe(true);
     });
 
-    test('should return error with invalid prediction', async () => {
+    test("error when submitting an invalid prediction", async () => {
       const response = await request(app)
         .post('/refinement/prediction/submit')
         .send({
@@ -356,12 +329,11 @@ describe('API Endpoints Tests', () => {
       expect(response.body.success).toBe(false);
     });
 
-    test('should return error with missing fields', async () => {
+    test("error with missing parameters", async () => {
       const response = await request(app)
         .post('/refinement/prediction/submit')
         .send({
           room_id: 'mock-uuid',
-          //missing role and prediction
         });
 
       expect(response.status).toBe(400);
@@ -369,9 +341,8 @@ describe('API Endpoints Tests', () => {
     });
   });
 
-  describe('Get Predictions', () => {
-    test('should get predictions successfully', async () => {
-      // Mock runQuery for successful predictions retrieval
+  describe("get the final predictions", () => {
+    test("get the final predictions successfully", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn()
@@ -398,7 +369,7 @@ describe('API Endpoints Tests', () => {
       expect(response.body.predictions[0].final_prediction).toBe(5.5);
     });
 
-    test('should return error with missing room_id', async () => {
+    test("error with a missing room_id", async () => {
       const response = await request(app)
         .get('/refinement/get/predictions')
         .query({});
@@ -408,11 +379,8 @@ describe('API Endpoints Tests', () => {
     });
   });
 
-  // ========================= Retro Comments Tests =========================
-
-  describe('Add Retro Comment', () => {
-    test('should add comment successfully', async () => {
-      // Mock runQuery for successful comment addition
+  describe('retro comments', () => {
+    test("add a comment successfully", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rowCount: 1 })
@@ -420,7 +388,6 @@ describe('API Endpoints Tests', () => {
         return await callback(mockClient);
       });
 
-      // Get the io object from the Socket.io mock
       const socketIo = require('socket.io');
       const io = socketIo.Server();
 
@@ -436,20 +403,18 @@ describe('API Endpoints Tests', () => {
       expect(io.to).toHaveBeenCalledWith('mock-uuid');
     });
 
-    test('should return error with missing fields', async () => {
+    test("error with missing parameters", async () => {
       const response = await request(app)
         .post('/retro/new/comment')
         .send({
           room_id: 'mock-uuid',
-          //missing comment
         });
 
       expect(response.status).toBe(400);
       expect(response.body.success).toBe(false);
     });
 
-    test('should sanitize HTML in comments', async () => {
-      // Mock runQuery for successful comment addition
+    test("sanitize submitted comments", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rowCount: 1 })
@@ -457,7 +422,6 @@ describe('API Endpoints Tests', () => {
         return await callback(mockClient);
       });
 
-      // Get the io object from the Socket.io mock
       const socketIo = require('socket.io');
       const io = socketIo.Server();
       const mockEmit = io.to().emit;
@@ -475,30 +439,21 @@ describe('API Endpoints Tests', () => {
     });
   });
 
-  describe('Create Action Item', () => {
-    test('should create action item successfully', async () => {
-      // Mock runQuery for successful action item creation
+  describe("create action items", () => {
+    test("create an action item successfully", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn()
-            .mockResolvedValueOnce({
-              rows: [{ email: 'test@example.com' }],
-              rowCount: 1
-            })
+            .mockResolvedValueOnce({ rows: [{ email: 'test@example.com' }], rowCount: 1 })
             .mockResolvedValueOnce({ rowCount: 1 })
         };
         return await callback(mockClient);
       });
-
-      // Import email module and mock sendActionNotification
-      const { sendActionNotification } = require('../utils/email');
-      sendActionNotification.mockResolvedValueOnce(true);
-
-      // Get the io object from the Socket.io mock
+    
       const socketIo = require('socket.io');
       const io = socketIo.Server();
       const mockEmit = io.to().emit;
-
+    
       const response = await request(app)
         .post('/retro/create/action')
         .send({
@@ -506,18 +461,19 @@ describe('API Endpoints Tests', () => {
           user_name: 'Test User',
           description: 'Test action item'
         });
-
+    
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
       expect(mockEmit).toHaveBeenCalledWith('action_added', {
         user_name: 'Test User',
         description: 'Test action item'
       });
-      expect(sendActionNotification).toHaveBeenCalled();
-    });
 
-    test('should return error when user not found', async () => {
-      // Mock runQuery for user not found scenario
+      const { sendActionNotification } = require("../utils/email");
+      expect(sendActionNotification).toHaveBeenCalled();
+    });    
+
+    test("error when the user is not found", async () => {
       runQuery.mockImplementationOnce(() => {
         throw new Error("Assigned user not found in the room");
       });
@@ -535,12 +491,11 @@ describe('API Endpoints Tests', () => {
       expect(response.body.message).toContain('user not found');
     });
 
-    test('should return error with missing fields', async () => {
+    test("error with missing parmeters", async () => {
       const response = await request(app)
         .post('/retro/create/action')
         .send({
           room_id: 'mock-uuid',
-          //missing user_name and description
         });
 
       expect(response.status).toBe(400);

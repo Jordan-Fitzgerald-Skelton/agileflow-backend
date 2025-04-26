@@ -7,9 +7,9 @@ const crypto = require("crypto");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 
-//imports the utility files (used for testing)
-const { pool, runQuery, retryConnection } = require('./utils/db');
-const { sendActionNotification } = require('./utils/email');
+//imports the utility files
+const { pool, runQuery, retryConnection } = require("./utils/db");
+const { sendActionNotification } = require("./utils/email");
 
 //cors and websocket setup with http
 const app = express();
@@ -49,23 +49,22 @@ retryConnection();
 app.use(cors());
 app.use(express.json());
 
-//middleware, this logs each request with its method, url, and timestamp.
+//logs each request with the method, url, and timestamp.
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   next();
 });
 
-//temporary table (just for the refinment board)
+//temporary table
 const TEMP_TABLE = "refinement_predictions";
 
 //generatea a invite code (6 random charactors)
 const inviteCode = async () => {
   let inviteCode, check;
+  //makes sure its unique 
   do {
     inviteCode = crypto.randomBytes(3).toString("hex");
-    //checks it doesn't exist in the database
     check = await pool.query("SELECT 1 FROM rooms WHERE invite_code = $1", [inviteCode]);
-    //retries if it does
   } while (check.rowCount > 0);
   return inviteCode;
 };
@@ -84,7 +83,6 @@ app.post("/refinement/create/room", async (req, res) => {
       );
       return result;
     });  
-    //response
     res.json({ 
       success: true, 
       message: "Refinement Room created successfully", 
@@ -113,7 +111,7 @@ app.post("/refinement/join/room", async (req, res) => {
         message: "Invalid input types"
       });
     }
-    //email validation
+    //basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -122,7 +120,6 @@ app.post("/refinement/join/room", async (req, res) => {
       });
     }
     const result = await runQuery(async (client) => {
-      //checks only the refinement rooms
       const roomResult = await client.query(
         "SELECT room_id FROM rooms WHERE invite_code = $1 AND room_type = 'refinement'",
         [invite_code]
@@ -187,14 +184,12 @@ app.post("/retro/join/room", async (req, res) => {
         message: "Missing required fields." 
       });
     }
-    //input validation
     if (typeof invite_code !== 'string' || typeof name !== 'string' || typeof email !== 'string') {
       return res.status(400).json({
         success: false,
         message: "Invalid input types"
       });
     }
-    //email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -318,14 +313,12 @@ app.post("/retro/new/comment", async (req, res) => {
     }
     //sanitises the comment
     const sanitizedComment = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    //stores the comment in the database
     await runQuery(async (client) => {
       await client.query(
         "INSERT INTO retro_comments (room_id, comment, created_at) VALUES ($1, $2, NOW())",
         [room_id, sanitizedComment]
       );
     });
-
     io.to(room_id).emit("new_comment", sanitizedComment);
     res.json({ 
       success: true, 
@@ -364,13 +357,12 @@ app.post("/retro/create/action", async (req, res) => {
       );
       return { email };
     });
-    //uses the methdo from the email utils file 
+    //sends the email
     await sendActionNotification({
       email: result.email,
       userName: assignedTo,
       description: description
     });
-    //response
     io.to(room_id).emit("action_added", { user_name: assignedTo, description });
     res.json({ 
       success: true,
@@ -393,7 +385,6 @@ const activeRooms = new Map();
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  //socket event fro when a user joins a room
   socket.on("join_room", async (data) => {
     try {
       const { invite_code, name, email } = data;
@@ -416,14 +407,14 @@ io.on("connection", (socket) => {
       //tracks the active users
       if (!activeRooms.has(room_id)) activeRooms.set(room_id, new Map());
       activeRooms.get(room_id).set(socket.id, { name, email });
-      //updates the active user list 
+      //updates the active user list
+      io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values())); 
     } catch (error) {
-      console.error("Error in submit_prediction:", error);
-      socket.emit("error", { message: "Failed to submit prediction" });
+      console.error("Error in join_room:", error);
+      socket.emit("error", { message: "Failed to join room" });
     }
   });  
 
-  //socket event for when a room is created
   socket.on("create_room", (roomData) => {
     try {
       if (!roomData || !roomData.room_id) {
@@ -437,7 +428,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  //socket event for action items
   socket.on("create_action", (actionData) => {
     try {
       if (!actionData || !actionData.room_id || !actionData.user_name || !actionData.description) {
@@ -451,14 +441,36 @@ io.on("connection", (socket) => {
     }
   });
 
-  //socket event for leaving a room
+  socket.on("submit_prediction", async (data) => {
+    try {
+      const { room_id, role, prediction } = data;
+      if (!room_id || !role || isNaN(prediction) || prediction <= 0) {
+        socket.emit("error", { message: "Invalid prediction data" });
+        return;
+      }
+      await runQuery(async (client) => {
+        await client.query(
+          `INSERT INTO ${TEMP_TABLE} (room_id, role, prediction, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT (room_id, role) DO UPDATE SET prediction = EXCLUDED.prediction`,
+          [room_id, role, prediction]
+        );
+      });
+      io.to(room_id).emit("prediction_submitted", { role, prediction });
+      console.log(`Prediction submitted for room ${room_id}: ${role} = ${prediction}`);
+    } catch (error) {
+      console.error("Error in submit_prediction:", error);
+      socket.emit("error", { message: "Failed to submit prediction" });
+    }
+  });
+
   socket.on("leave_room", ({ roomId }) => {
     try {
       if (!roomId) {
         socket.emit("error", { message: "Room ID is required" });
         return;
       }
-      //removes the user from the active user list and the room is the amount of users is 0
+      //removes the user from the active user list and the room when it's empty
       socket.leave(roomId);
       if (activeRooms.has(roomId)) {
         activeRooms.get(roomId).delete(socket.id);
@@ -475,15 +487,14 @@ io.on("connection", (socket) => {
     }
   });
 
-  //when disconnecting, the room is remove the socket and the rooms list
-  //then the updated list is retruned 
+  //when disconnecting, the room is remove the socket and the rooms list then the updated list is retruned 
   socket.on("disconnect", () => {
     try {
       console.log("User disconnected:", socket.id);
       activeRooms.forEach((users, room_id) => {
         if (users.has(socket.id)) {
           users.delete(socket.id);
-          //this will remove the room when the amount of users reaches 0 after 30 seconds
+          //this will remove the room when its empty after 30 seconds
           if (users.size === 0) {
             setTimeout(() => {
               if (activeRooms.has(room_id) && activeRooms.get(room_id).size === 0) {

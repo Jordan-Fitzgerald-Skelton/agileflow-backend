@@ -7,9 +7,7 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   password: process.env.DB_PASSWORD,
   port: process.env.DB_PORT,
-  //only 20 connections
-  max: 20,
-  //will remove the connection 
+  max: 20, 
   idleTimeoutMillis: 30000
 });
 

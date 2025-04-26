@@ -1,15 +1,13 @@
 const request = require("supertest");
 const app = require("../server");
 
-describe("API Endpoint Tests", () => {
+describe("Endpoint tests", () => {
   let refinementInviteCode = "";
   let retroInviteCode = "";
   let refinementRoomId = "";
   let retroRoomId = "";
 
-  // --- Refinement Room ---
-
-  test("Create refinement room", async () => {
+  test("create a refinement room", async () => {
     const res = await request(app).post("/refinement/create/room");
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
@@ -17,11 +15,11 @@ describe("API Endpoint Tests", () => {
     refinementRoomId = res.body.room_id;
   });
 
-  test("Join refinement room", async () => {
+  test("join a refinement room", async () => {
     const res = await request(app).post("/refinement/join/room").send({
       invite_code: refinementInviteCode,
-      name: "Alice",
-      email: "alice@example.com"
+      name: "Bob",
+      email: "bob@example.com"
     });
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
@@ -37,7 +35,7 @@ describe("API Endpoint Tests", () => {
     expect(res.body.success).toBe(true);
   });
 
-  test("Get predictions", async () => {
+  test("get the final predictions", async () => {
     const res = await request(app).get("/refinement/get/predictions").query({
       room_id: refinementRoomId
     });
@@ -46,9 +44,7 @@ describe("API Endpoint Tests", () => {
     expect(Array.isArray(res.body.predictions)).toBe(true);
   });
 
-  // --- Retro Room ---
-
-  test("Create retro room", async () => {
+  test("create a retro room", async () => {
     const res = await request(app).post("/retro/create/room");
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
@@ -56,7 +52,7 @@ describe("API Endpoint Tests", () => {
     retroRoomId = res.body.room_id;
   });
 
-  test("Join retro room", async () => {
+  test("join a retro room", async () => {
     const res = await request(app).post("/retro/join/room").send({
       invite_code: retroInviteCode,
       name: "Bob",
@@ -66,7 +62,7 @@ describe("API Endpoint Tests", () => {
     expect(res.body.success).toBe(true);
   });
 
-  test("Post a retro comment", async () => {
+  test("add a comment", async () => {
     const res = await request(app).post("/retro/new/comment").send({
       room_id: retroRoomId,
       comment: "Great job team!"
@@ -75,13 +71,12 @@ describe("API Endpoint Tests", () => {
     expect(res.body.success).toBe(true);
   });
 
-  test("Create an action item", async () => {
+  test("add a action item", async () => {
     const res = await request(app).post("/retro/create/action").send({
       room_id: retroRoomId,
       user_name: "Bob",
       description: "Follow up on last sprint bugs"
     });
-    // depending on your db setup, this may fail if the user email isn’t in the db
     expect([200, 400, 500]).toContain(res.statusCode);
   });
 });

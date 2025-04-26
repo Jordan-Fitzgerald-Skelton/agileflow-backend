@@ -1,13 +1,13 @@
-const Client = require('socket.io-client');
-const { v4: uuidv4 } = require('uuid');
+const Client = require("socket.io-client");
+const { v4: uuidv4 } = require("uuid");
 
-jest.mock('uuid');
-jest.mock('../utils/db');
+jest.mock("uuid");
+jest.mock("../utils/db");
 
-const { pool } = require('../utils/db');
-const server = require('../server');
+const { pool } = require("../utils/db");
+const server = require("../server");
 
-describe('WebSocket Integration Tests', () => {
+describe("WebSocket Tests", () => {
   let clientSocket;
   let port;
   const TIMEOUT = 30000;
@@ -39,7 +39,7 @@ describe('WebSocket Integration Tests', () => {
     jest.clearAllMocks();
   });
 
-  it('should join a room successfully', (done) => {
+  it("join a room successfully", (done) => {
     pool.query.mockResolvedValueOnce({
       rows: [{ room_id: 'test-room-id' }],
       rowCount: 1
@@ -60,7 +60,7 @@ describe('WebSocket Integration Tests', () => {
     });
   }, TIMEOUT);
 
-  it('should handle room not found error', (done) => {
+  it("room not found", (done) => {
     pool.query.mockResolvedValueOnce({
       rows: [],
       rowCount: 0
@@ -78,7 +78,7 @@ describe('WebSocket Integration Tests', () => {
     });
   }, TIMEOUT);
 
-  it('should handle submit_prediction event', (done) => {
+  it("submit_prediction event", (done) => {
     pool.query.mockResolvedValueOnce({
       rows: [{ room_id: 'test-room-id' }],
       rowCount: 1
@@ -105,7 +105,7 @@ describe('WebSocket Integration Tests', () => {
     }, 100);
   }, TIMEOUT);
 
-  it('should handle create_action event', (done) => {
+  it("create_action event", (done) => {
     pool.query.mockResolvedValueOnce({
       rows: [{ room_id: 'test-room-id' }],
       rowCount: 1
@@ -133,7 +133,7 @@ describe('WebSocket Integration Tests', () => {
     }, 100);
   }, TIMEOUT);
 
-  it('should handle leave_room event', (done) => {
+  it("leave_room event", (done) => {
     pool.query.mockResolvedValueOnce({
       rows: [{ room_id: 'test-room-id' }],
       rowCount: 1
@@ -153,7 +153,7 @@ describe('WebSocket Integration Tests', () => {
     }, 100);
   }, TIMEOUT);
 
-  it('should handle disconnect event', (done) => {
+  it("disconnect event", (done) => {
     const tempClient = Client(`http://localhost:${port}`);
     
     tempClient.on('connect', () => {
