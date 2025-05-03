@@ -90,3 +90,32 @@ describe("Database tests", () => {
     expect(mockClient.release).toHaveBeenCalled();
   });
 });
+
+test("should try to connect again there's a failure", () => {
+  const mockConnect = jest.fn((cb) => cb(new Error("Connection failed"), null, null));
+  const mockOn = jest.fn();
+  const mockPool = { connect: mockConnect, on: mockOn };
+
+  jest.resetModules();
+
+  jest.mock("pg", () => ({
+    Pool: jest.fn(() => mockPool)
+  }));
+
+  const { retryConnection } = require("../utils/db");
+
+  const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  const timeoutSpy = jest.spyOn(global, "setTimeout").mockImplementation(() => {});
+
+  retryConnection();
+
+  expect(mockConnect).toHaveBeenCalled();
+  expect(errorSpy).toHaveBeenCalledWith(
+    "Failed to connect to the database",
+    expect.any(Error)
+  );
+  expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
+
+  errorSpy.mockRestore();
+  timeoutSpy.mockRestore();
+});
