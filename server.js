@@ -464,6 +464,36 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("reset_session", (data) => {
+    try {
+      const { room_id } = data;
+      if (!room_id) {
+        socket.emit("error", { message: "Room ID is required" });
+        return;
+      }
+      io.to(room_id).emit("session_reset");
+      console.log(`Session reset for room ${room_id}`);
+    } catch (error) {
+      console.error("Error in reset_session:", error);
+      socket.emit("error", { message: "Failed to reset session" });
+    }
+  });
+  
+  socket.on("reveal_results", (data) => {
+    try {
+      const { room_id, predictions } = data;
+      if (!room_id || !predictions) {
+        socket.emit("error", { message: "Invalid results data" });
+        return;
+      }
+      io.to(room_id).emit("results_revealed", predictions);
+      console.log(`Results revealed for room ${room_id}`);
+    } catch (error) {
+      console.error("Error in reveal_results:", error);
+      socket.emit("error", { message: "Failed to reveal results" });
+    }
+  });
+
   socket.on("leave_room", ({ roomId }) => {
     try {
       if (!roomId) {
