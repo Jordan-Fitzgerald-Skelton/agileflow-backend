@@ -37,16 +37,7 @@ describe("WebSocket Tests", () => {
 
   afterEach(() => {
     jest.clearAllMocks();
-  });
-
-  it("create_room with invalid data", (done) => {
-    clientSocket.once("error", (data) => {
-      expect(data.message).toBe("Invalid room data");
-      done();
-    });
-  
-    clientSocket.emit("create_room", {});
-  });  
+  }); 
 
   it("join a room successfully", (done) => {
     pool.query.mockResolvedValueOnce({

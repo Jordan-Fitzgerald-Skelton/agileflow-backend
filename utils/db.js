@@ -12,7 +12,7 @@ const pool = new Pool({
 });
 
 //executes the queries from the server, rolls backe when there are erros and 
-//executes the query when it succeeds 
+//commits the query when it succeeds 
 const runQuery = async (callback) => {
   const client = await pool.connect();
   try {

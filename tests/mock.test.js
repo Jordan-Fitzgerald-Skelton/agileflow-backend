@@ -414,7 +414,7 @@ describe("Mock endpoint tests", () => {
       expect(response.body.success).toBe(false);
     });
 
-    test("sanitize submitted comments", async () => {
+    test("sanitise submitted comments", async () => {
       runQuery.mockImplementationOnce(async (callback) => {
         const mockClient = {
           query: jest.fn().mockResolvedValueOnce({ rowCount: 1 })

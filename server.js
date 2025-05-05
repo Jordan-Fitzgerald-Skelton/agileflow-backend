@@ -312,14 +312,14 @@ app.post("/retro/new/comment", async (req, res) => {
       });
     }
     //sanitises the comment
-    const sanitizedComment = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const sanitisedComment  = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
     await runQuery(async (client) => {
       await client.query(
         "INSERT INTO retro_comments (room_id, comment, created_at) VALUES ($1, $2, NOW())",
-        [room_id, sanitizedComment]
+        [room_id, sanitisedComment ]
       );
     });
-    io.to(room_id).emit("new_comment", sanitizedComment);
+    io.to(room_id).emit("new_comment", sanitisedComment );
     res.json({ 
       success: true, 
       message: "Comment added successfully" 
@@ -412,19 +412,6 @@ io.on("connection", (socket) => {
     } catch (error) {
       console.error("Error in join_room:", error);
       socket.emit("error", { message: "Failed to join room" });
-    }
-  });  
-
-  socket.on("create_room", (roomData) => {
-    try {
-      if (!roomData || !roomData.room_id) {
-        socket.emit("error", { message: "Invalid room data" });
-        return;
-      }
-      socket.to(roomData.room_id).emit("room_created", roomData);
-    } catch (error) {
-      console.error("Error in create_room:", error);
-      socket.emit("error", { message: "Failed to create room" });
     }
   });
 
