@@ -6,6 +6,6 @@ In the project dirctory run
 
 This will runs the app http://localhost:5000.
 
-***npm rest***
+***npm test***
 
 This will start the execution of the test file.
