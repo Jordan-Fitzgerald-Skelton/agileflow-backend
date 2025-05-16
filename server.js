@@ -68,11 +68,11 @@ const inviteCode = async () => {
   return inviteCode;
 };
 
-// Function to clean up room data when a room is finished
+//cleans up the room data when a room is finished
 const cleanupRoomData = async (room_id) => {
   try {
     await runQuery(async (client) => {
-      // Delete all related data for the room
+      //delete all the data for the room
       await client.query(`DELETE FROM ${TEMP_TABLE} WHERE room_id = $1`, [room_id]);
       await client.query("DELETE FROM retro_comments WHERE room_id = $1", [room_id]);
       await client.query("DELETE FROM retro_actions WHERE room_id = $1", [room_id]);
@@ -88,21 +88,17 @@ const cleanupRoomData = async (room_id) => {
   }
 };
 
-// Consolidated Room endpoints
-
-// Create a room (unified endpoint)
+//create a room
 app.post("/create/room", async (req, res) => {
   try {
     const { room_type } = req.body;
-
-    // Validate room_type
+    //validate the room_type
     if (!room_type || !['refinement', 'retro'].includes(room_type)) {
       return res.status(400).json({
         success: false,
         message: "Invalid room type. Must be 'refinement' or 'retro'."
       });
     }
-
     const result = await runQuery(async (client) => {
       const invite_code = await inviteCode();
       const room_id = uuidv4();
@@ -112,7 +108,6 @@ app.post("/create/room", async (req, res) => {
       );
       return result;
     });
-
     res.json({
       success: true,
       message: `${room_type.charAt(0).toUpperCase() + room_type.slice(1)} Room created successfully`,
@@ -124,7 +119,7 @@ app.post("/create/room", async (req, res) => {
   }
 });
 
-// Join a room (unified endpoint)
+//join a room
 app.post("/join/room", async (req, res) => {
   try {
     const { invite_code, name, email } = req.body;
@@ -134,16 +129,14 @@ app.post("/join/room", async (req, res) => {
         message: "Missing required fields."
       });
     }
-
-    // Input validation
+    //input validation
     if (typeof invite_code !== 'string' || typeof name !== 'string' || typeof email !== 'string') {
       return res.status(400).json({
         success: false,
         message: "Invalid input types"
       });
     }
-
-    // Basic email validation
+    //basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -151,20 +144,16 @@ app.post("/join/room", async (req, res) => {
         message: "Invalid email format"
       });
     }
-
     const result = await runQuery(async (client) => {
       const roomResult = await client.query(
         "SELECT room_id, room_type FROM rooms WHERE invite_code = $1",
         [invite_code]
       );
-
       if (roomResult.rowCount === 0) {
         throw new Error("Invalid invite code");
       }
-
       const { room_id, room_type } = roomResult.rows[0];
-
-      // Check if the user can be added to the room, if they already are do nothing
+      //Check if the user can be added to the room, if they already are do nothing
       await client.query(
         "INSERT INTO room_users (room_id, name, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
         [room_id, name, email]
@@ -172,7 +161,6 @@ app.post("/join/room", async (req, res) => {
 
       return { room_id, room_type };
     });
-
     res.json({
       success: true,
       message: `Joined ${result.room_type} room successfully`,
@@ -190,24 +178,19 @@ app.post("/join/room", async (req, res) => {
   }
 });
 
-// Endpoint to mark a room as finished
 app.post("/finish/room", async (req, res) => {
   try {
     const { room_id } = req.body;
-
     if (!room_id) {
       return res.status(400).json({
         success: false,
         message: "Room ID is required"
       });
     }
-
     const cleaned = await cleanupRoomData(room_id);
-
     if (cleaned) {
-      // Notify all connected clients that the room is closed
+      //tells all connected users the room is closed
       io.to(room_id).emit("room_closed", { message: "This room has been closed by the host" });
-
       res.json({
         success: true,
         message: "Room and associated data successfully cleaned up"
@@ -220,168 +203,7 @@ app.post("/finish/room", async (req, res) => {
   }
 });
 
-// Keep the old endpoints temporarily (mark as deprecated)
-app.post("/refinement/create/room", async (req, res) => {
-  console.warn("Deprecated endpoint used: /refinement/create/room");
-  try {
-    const result = await runQuery(async (client) => {
-      const invite_code = await inviteCode();
-      const room_id = uuidv4();
-      const result = await client.query(
-        "INSERT INTO rooms (room_id, invite_code, room_type, created_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
-        [room_id, invite_code, 'refinement']
-      );
-      return result;
-    });
-    res.json({
-      success: true,
-      message: "Refinement Room created successfully (Deprecated API)",
-      room_id: result.rows[0].room_id,
-      invite_code: result.rows[0].invite_code
-    });
-  } catch (error) {
-    return handleError(res, error, "Failed to create room");
-  }
-});
-
-app.post("/refinement/join/room", async (req, res) => {
-  console.warn("Deprecated endpoint used: /refinement/join/room");
-  try {
-    const { invite_code, name, email } = req.body;
-    if (!invite_code || !name || !email) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields."
-      });
-    }
-
-    if (typeof invite_code !== 'string' || typeof name !== 'string' || typeof email !== 'string') {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid input types"
-      });
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid email format"
-      });
-    }
-
-    const result = await runQuery(async (client) => {
-      const roomResult = await client.query(
-        "SELECT room_id FROM rooms WHERE invite_code = $1 AND room_type = 'refinement'",
-        [invite_code]
-      );
-      if (roomResult.rowCount === 0) {
-        throw new Error("Invalid invite code");
-      }
-      const { room_id } = roomResult.rows[0];
-
-      await client.query(
-        "INSERT INTO room_users (room_id, name, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        [room_id, name, email]
-      );
-      return { room_id };
-    });
-
-    res.json({
-      success: true,
-      message: "Joined refinement room successfully (Deprecated API)",
-      room_id: result.room_id
-    });
-  } catch (error) {
-    if (error.message === "Invalid invite code") {
-      return res.status(404).json({
-        success: false,
-        message: "Invalid invite code."
-      });
-    }
-    return handleError(res, error, "Failed to join refinement room");
-  }
-});
-
-app.post("/retro/create/room", async (req, res) => {
-  console.warn("Deprecated endpoint used: /retro/create/room");
-  try {
-    const result = await runQuery(async (client) => {
-      const invite_code = await inviteCode();
-      const room_id = uuidv4();
-      const result = await client.query(
-        "INSERT INTO rooms (room_id, invite_code, room_type, created_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) RETURNING room_id, invite_code",
-        [room_id, invite_code, 'retro']
-      );
-      return result;
-    });
-    res.json({
-      success: true,
-      message: "Retro Room created successfully (Deprecated API)",
-      room_id: result.rows[0].room_id,
-      invite_code: result.rows[0].invite_code
-    });
-  } catch (error) {
-    return handleError(res, error, "Failed to create room");
-  }
-});
-
-app.post("/retro/join/room", async (req, res) => {
-  console.warn("Deprecated endpoint used: /retro/join/room");
-
-  try {
-    const { invite_code, name, email } = req.body;
-    if (!invite_code || !name || !email) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields."
-      });
-    }
-    if (typeof invite_code !== 'string' || typeof name !== 'string' || typeof email !== 'string') {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid input types"
-      });
-    }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid email format"
-      });
-    }
-    const result = await runQuery(async (client) => {
-      const roomResult = await client.query(
-        "SELECT room_id FROM rooms WHERE invite_code = $1 AND room_type = 'retro'",
-        [invite_code]
-      );
-      if (roomResult.rowCount === 0) {
-        throw new Error("Invalid invite code");
-      }
-      const { room_id } = roomResult.rows[0];
-      await client.query(
-        "INSERT INTO room_users (room_id, name, email) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        [room_id, name, email]
-      );
-      return { room_id };
-    });
-    res.json({
-      success: true,
-      message: "Joined retro room successfully (Deprecated API)",
-      room_id: result.room_id
-    });
-  } catch (error) {
-    if (error.message === "Invalid invite code") {
-      return res.status(404).json({
-        success: false,
-        message: "Invalid invite code."
-      });
-    }
-    return handleError(res, error, "Failed to join retro room");
-  }
-});
-
-// Refinement endpoints
+//refinement endpoints
 app.post("/refinement/prediction/submit", async (req, res) => {
   const { room_id, role, prediction } = req.body;
   // Input validation
@@ -402,21 +224,19 @@ app.post("/refinement/prediction/submit", async (req, res) => {
       );
     });
 
-    // Update submission status for the user in activeRooms
+    //updates the submission status for the user in activeRooms
     if (activeRooms.has(room_id)) {
       const socketIds = [];
-      // Find socket IDs for the submitting user
+      //find socket ids for the submitting user
       activeRooms.get(room_id).forEach((userData, socketId) => {
         if (userData.role === role) {
           userData.hasSubmitted = true;
           socketIds.push(socketId);
         }
       });
-
-      // Emit updated user list to everyone in the room
+      //sends the updated user list to everyone in the room
       io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
     }
-
     res.json({
       success: true,
       message: "Prediction submitted successfully"
@@ -454,7 +274,6 @@ app.get("/refinement/get/predictions", async (req, res) => {
         `DELETE FROM ${TEMP_TABLE} WHERE room_id = $1`,
         [room_id]
       );
-
       // Reset submission status for all users in the room
       if (activeRooms.has(room_id)) {
         activeRooms.get(room_id).forEach((userData) => {
@@ -463,7 +282,6 @@ app.get("/refinement/get/predictions", async (req, res) => {
         // Emit updated user list
         io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
       }
-
       return predictions;
     });
     res.json({
@@ -475,7 +293,7 @@ app.get("/refinement/get/predictions", async (req, res) => {
   }
 });
 
-// Retro endpoints - Enhanced Comment Management
+//retro endpoints
 app.post("/retro/new/comment", async (req, res) => {
   try {
     const { room_id, comment, user_name, email } = req.body;
@@ -485,10 +303,8 @@ app.post("/retro/new/comment", async (req, res) => {
         message: "Missing required fields"
       });
     }
-
-    // Sanitize the comment
+    //sanitise the comment
     const sanitizedComment = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
     const result = await runQuery(async (client) => {
       const commentResult = await client.query(
         "INSERT INTO retro_comments (room_id, comment, user_name, email, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id",
@@ -497,8 +313,7 @@ app.post("/retro/new/comment", async (req, res) => {
 
       return { comment_id: commentResult.rows[0].id };
     });
-
-    // Emit the new comment with user details
+    //emit the new comment with the users details
     io.to(room_id).emit("new_comment", {
       id: result.comment_id,
       comment: sanitizedComment,
@@ -506,7 +321,6 @@ app.post("/retro/new/comment", async (req, res) => {
       email: email || null,
       created_at: new Date().toISOString()
     });
-
     res.json({
       success: true,
       message: "Comment added successfully",
@@ -517,7 +331,6 @@ app.post("/retro/new/comment", async (req, res) => {
   }
 });
 
-// Get all comments for a room
 app.get("/retro/get/comments", async (req, res) => {
   try {
     const { room_id } = req.query;
@@ -527,7 +340,6 @@ app.get("/retro/get/comments", async (req, res) => {
         message: "Missing room_id"
       });
     }
-
     const result = await runQuery(async (client) => {
       const commentsResult = await client.query(
         "SELECT id, comment, user_name, email, created_at FROM retro_comments WHERE room_id = $1 ORDER BY created_at ASC",
@@ -536,7 +348,6 @@ app.get("/retro/get/comments", async (req, res) => {
 
       return commentsResult.rows;
     });
-
     res.json({
       success: true,
       comments: result
@@ -546,47 +357,38 @@ app.get("/retro/get/comments", async (req, res) => {
   }
 });
 
-// Update a comment
 app.put("/retro/update/comment", async (req, res) => {
   try {
     const { comment_id, comment, user_name, room_id } = req.body;
-
     if (!comment_id || !comment || !user_name || !room_id) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields"
       });
     }
-
-    // Sanitize the updated comment
+    //sanitise the updated comment
     const sanitizedComment = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
     const result = await runQuery(async (client) => {
-      // Check if the user is the comment author
+      //check if the user is the one who created the comment
       const checkResult = await client.query(
         "SELECT 1 FROM retro_comments WHERE id = $1 AND user_name = $2",
         [comment_id, user_name]
       );
-
       if (checkResult.rowCount === 0) {
         throw new Error("Unauthorized");
       }
-
       await client.query(
         "UPDATE retro_comments SET comment = $1 WHERE id = $2",
         [sanitizedComment, comment_id]
       );
-
-      // Get the updated comment
+      //get the updated comment
       const updatedResult = await client.query(
         "SELECT id, comment, user_name, email, created_at FROM retro_comments WHERE id = $1",
         [comment_id]
       );
-
       return updatedResult.rows[0];
     });
-
-    // Emit the updated comment
+    //emit the updated comment
     io.to(room_id).emit("comment_updated", result);
 
     res.json({
@@ -605,38 +407,31 @@ app.put("/retro/update/comment", async (req, res) => {
   }
 });
 
-// Delete a comment
 app.delete("/retro/delete/comment", async (req, res) => {
   try {
     const { comment_id, user_name, room_id } = req.body;
-
     if (!comment_id || !user_name || !room_id) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields"
       });
     }
-
     await runQuery(async (client) => {
-      // Check if the user is the comment author
+      //check if the user is the one who created the comment
       const checkResult = await client.query(
         "SELECT 1 FROM retro_comments WHERE id = $1 AND user_name = $2",
         [comment_id, user_name]
       );
-
       if (checkResult.rowCount === 0) {
         throw new Error("Unauthorized");
       }
-
       await client.query(
         "DELETE FROM retro_comments WHERE id = $1",
         [comment_id]
       );
     });
-
-    // Emit that the comment was deleted
+    //emit that the comment was deleted
     io.to(room_id).emit("comment_deleted", { comment_id });
-
     res.json({
       success: true,
       message: "Comment deleted successfully"
@@ -656,14 +451,12 @@ app.post("/retro/create/action", async (req, res) => {
   try {
     const { room_id, user_name, description, assignee_name } = req.body;
     const assignedTo = assignee_name || user_name;
-
     if (!room_id || !user_name || !description) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields"
       });
     }
-
     const result = await runQuery(async (client) => {
       const userResult = await client.query(
         "SELECT email FROM room_users WHERE room_id = $1 AND name = $2",
@@ -673,28 +466,24 @@ app.post("/retro/create/action", async (req, res) => {
         throw new Error("Assigned user not found in the room");
       }
       const email = userResult.rows[0].email;
-
       const actionResult = await client.query(
         "INSERT INTO retro_actions (room_id, user_name, description) VALUES ($1, $2, $3) RETURNING id",
         [room_id, assignedTo, description]
       );
-
       return { email, action_id: actionResult.rows[0].id };
     });
 
-    // Send the email
+    //send the email
     await sendActionNotification({
       email: result.email,
       userName: assignedTo,
       description: description
     });
-
     io.to(room_id).emit("action_added", {
       id: result.action_id,
       user_name: assignedTo,
       description
     });
-
     res.json({
       success: true,
       message: "Action created and email sent successfully",
@@ -711,67 +500,57 @@ app.post("/retro/create/action", async (req, res) => {
   }
 });
 
-// WebSockets
+//websockets
+
 const activeRooms = new Map();
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
-
   socket.on("join_room", async (data) => {
     try {
-      const { invite_code, name, email, role } = data; // Added role parameter
+      const { invite_code, name, email, role } = data;
       if (!invite_code || !name || !email) {
         socket.emit("error", { message: "Missing required fields" });
         return;
       }
-
-      // Check the invite code
+      //check the invite code
       const result = await pool.query(
         "SELECT room_id, room_type FROM rooms WHERE invite_code = $1",
         [invite_code]
       );
-
       if (result.rowCount === 0) {
         socket.emit("error", { message: "Room not found" });
         return;
       }
-
       const room_id = result.rows[0].room_id;
       const room_type = result.rows[0].room_type;
-
       socket.join(room_id);
       console.log(`User ${socket.id} joined room: ${room_id} (${name})`);
-
-      // Track the active users with additional field for submission status
+      //track the active users
       if (!activeRooms.has(room_id)) {
         activeRooms.set(room_id, new Map());
       }
-
-      // Store user with role and submission status if provided
+      //store user with role and submission status if provided
       const userData = {
         name,
         email,
-        hasSubmitted: false // Default to not submitted
+        hasSubmitted: false //default to not submitted
       };
 
-      // If role is provided and this is a refinement room, store the role
+      //if role is provided and this is a refinement room, store the role
       if (role && room_type === 'refinement') {
         userData.role = role;
       }
-
       activeRooms.get(room_id).set(socket.id, userData);
-
-      // Update the active user list
+      //update the active user list
       io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
-
-      // If this is a retro room, send existing comments
+      //if this is a retro room, send existing comments
       if (room_type === 'retro') {
         try {
           const commentsResult = await pool.query(
             "SELECT id, comment, user_name, email, created_at FROM retro_comments WHERE room_id = $1 ORDER BY created_at ASC",
             [room_id]
           );
-
           socket.emit("initial_comments", commentsResult.rows);
         } catch (error) {
           console.error("Error fetching initial comments:", error);
@@ -803,7 +582,6 @@ io.on("connection", (socket) => {
         socket.emit("error", { message: "Invalid prediction data" });
         return;
       }
-
       await runQuery(async (client) => {
         await client.query(
           `INSERT INTO ${TEMP_TABLE} (room_id, role, prediction, created_at)
@@ -812,21 +590,18 @@ io.on("connection", (socket) => {
           [room_id, role, prediction]
         );
       });
-
-      // Update submission status for the user
+      //update submission status for the user
       if (activeRooms.has(room_id)) {
-        // If this socket has this role, mark as submitted
+        //if this socket has this role, mark as submitted
         if (activeRooms.get(room_id).has(socket.id)) {
           const userData = activeRooms.get(room_id).get(socket.id);
           if (userData.role === role) {
             userData.hasSubmitted = true;
-
-            // Update all connected clients with new user list
+            //update all connected users with new user list
             io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
           }
         }
       }
-
       io.to(room_id).emit("prediction_submitted", { role, prediction });
       console.log(`Prediction submitted for room ${room_id}: ${role} = ${prediction}`);
     } catch (error) {
@@ -842,8 +617,7 @@ io.on("connection", (socket) => {
         socket.emit("error", { message: "Room ID is required" });
         return;
       }
-
-      // Check if room exists in database
+      //check if room exists in database
       const roomExists = await runQuery(async (client) => {
         const result = await client.query(
           "SELECT 1 FROM rooms WHERE room_id = $1",
@@ -851,19 +625,16 @@ io.on("connection", (socket) => {
         );
         return result.rowCount > 0;
       });
-
       if (!roomExists) {
         socket.emit("error", { message: "Room not found" });
         return;
       }
-
-      // Reset the hasSubmitted status for all users in the room
+      //reset the hasSubmitted status for all users in the room
       if (activeRooms.has(room_id)) {
         activeRooms.get(room_id).forEach(userData => {
           userData.hasSubmitted = false;
         });
-
-        // Also clear any stored predictions in the database
+        //clear any stored predictions in the database
         await runQuery(async (client) => {
           await client.query(
             `DELETE FROM ${TEMP_TABLE} WHERE room_id = $1`,
@@ -871,10 +642,9 @@ io.on("connection", (socket) => {
           );
         });
 
-        // Emit updated user list with reset submission status
+        //emit the updated user list with reset submission status
         io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
       }
-
       io.to(room_id).emit("session_reset");
       console.log(`Session reset for room ${room_id}`);
     } catch (error) {
@@ -890,8 +660,7 @@ io.on("connection", (socket) => {
         socket.emit("error", { message: "Invalid results data" });
         return;
       }
-
-      // Check if room exists in database
+      //check if room exists in the database
       const roomExists = await runQuery(async (client) => {
         const result = await client.query(
           "SELECT 1 FROM rooms WHERE room_id = $1",
@@ -904,14 +673,13 @@ io.on("connection", (socket) => {
         socket.emit("error", { message: "Room not found" });
         return;
       }
-
-      // Validate predictions format
+      //validate the predictions format
       if (!Array.isArray(predictions)) {
         socket.emit("error", { message: "Predictions must be an array" });
         return;
       }
 
-      // Check if predictions have the expected structure
+      //check if predictions have the expected structure
       const isValidPrediction = predictions.every(pred =>
         typeof pred === 'object' &&
         pred !== null &&
@@ -920,14 +688,12 @@ io.on("connection", (socket) => {
         typeof pred.role === 'string' &&
         typeof pred.final_prediction === 'number'
       );
-
       if (!isValidPrediction) {
         socket.emit("error", {
           message: "Predictions must have role (string) and final_prediction (number) properties"
         });
         return;
       }
-
       io.to(room_id).emit("results_revealed", predictions);
       console.log(`Results revealed for room ${room_id}`);
     } catch (error) {
@@ -966,15 +732,14 @@ io.on("connection", (socket) => {
       activeRooms.forEach((users, room_id) => {
         if (users.has(socket.id)) {
           users.delete(socket.id);
-
           //this will remove the room when its empty after 30 seconds
           if (users.size === 0) {
             setTimeout(async () => {
-              // Check if the room is still empty after timeout
+              //check if the room is still empty after timeout
               if (activeRooms.has(room_id) && activeRooms.get(room_id).size === 0) {
-                // Instead of just removing from activeRooms, also clean up database
+                //instead of just removing from activeRooms, also clean up database
                 try {
-                  // Get room details to determine if it should be cleaned up
+                  //get room details to determine if it should be cleaned up
                   const roomDetails = await runQuery(async (client) => {
                     const result = await client.query(
                       "SELECT created_at FROM rooms WHERE room_id = $1",
@@ -984,24 +749,23 @@ io.on("connection", (socket) => {
                   });
 
                   if (roomDetails) {
-                    // If the room is older than 2 hours and empty, clean it up
+                    //if the room is older than 2 hours and empty, clean it up
                     const roomAge = Date.now() - new Date(roomDetails.created_at).getTime();
                     const twoHoursInMs = 2 * 60 * 60 * 1000;
-
                     if (roomAge > twoHoursInMs) {
                       console.log(`Room ${room_id} is empty and older than 2 hours, cleaning up data...`);
                       await cleanupRoomData(room_id);
                     } else {
-                      // Just remove from active rooms but keep in database
+                      //remove from active rooms but keep in database
                       activeRooms.delete(room_id);
                     }
                   } else {
-                    // Room not found in database, just remove from active rooms
+                    //rooms not found in the database, remove from the active rooms list
                     activeRooms.delete(room_id);
                   }
                 } catch (error) {
                   console.error(`Error checking room age for cleanup: ${error}`);
-                  // Just remove from active rooms if we hit an error
+                  //remove from active rooms if it has an error
                   activeRooms.delete(room_id);
                 }
               }
