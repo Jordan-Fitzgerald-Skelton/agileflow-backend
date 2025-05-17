@@ -508,7 +508,7 @@ io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
   socket.on("join_room", async (data) => {
     try {
-      const { invite_code, name, email, role } = data;
+      const { invite_code, name, email } = data;
       if (!invite_code || !name || !email) {
         socket.emit("error", { message: "Missing required fields" });
         return;
@@ -530,17 +530,11 @@ io.on("connection", (socket) => {
       if (!activeRooms.has(room_id)) {
         activeRooms.set(room_id, new Map());
       }
-      //store user with role and submission status if provided
       const userData = {
         name,
         email,
-        hasSubmitted: false //default to not submitted
+        hasSubmitted: false
       };
-
-      //if role is provided and this is a refinement room, store the role
-      if (role && room_type === 'refinement') {
-        userData.role = role;
-      }
       activeRooms.get(room_id).set(socket.id, userData);
       //update the active user list
       io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
@@ -578,7 +572,7 @@ io.on("connection", (socket) => {
   socket.on("submit_prediction", async (data) => {
     try {
       const { room_id, role, prediction } = data;
-      if (!room_id || !role || isNaN(prediction) || prediction <= 0) {
+      if (!room_id || !role || isNaN(prediction) || prediction <= 1) {
         socket.emit("error", { message: "Invalid prediction data" });
         return;
       }
@@ -595,11 +589,9 @@ io.on("connection", (socket) => {
         //if this socket has this role, mark as submitted
         if (activeRooms.get(room_id).has(socket.id)) {
           const userData = activeRooms.get(room_id).get(socket.id);
-          if (userData.role === role) {
-            userData.hasSubmitted = true;
-            //update all connected users with new user list
-            io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
-          }
+          userData.hasSubmitted = true;
+          //update all connected users with new user list
+          io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
         }
       }
       io.to(room_id).emit("prediction_submitted", { role, prediction });
