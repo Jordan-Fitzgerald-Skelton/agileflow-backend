@@ -205,9 +205,9 @@ app.post("/finish/room", async (req, res) => {
 
 //refinement endpoints
 app.post("/refinement/prediction/submit", async (req, res) => {
-  const { room_id, role, prediction } = req.body;
+  const { room_id, name, role, prediction } = req.body;
   // Input validation
-  if (!room_id || !role || isNaN(prediction) || prediction <= 0) {
+  if (!room_id || !name || !role || isNaN(prediction) || prediction <= 0) {
     return res.status(400).json({
       success: false,
       message: "Invalid prediction data"
@@ -217,10 +217,10 @@ app.post("/refinement/prediction/submit", async (req, res) => {
     await runQuery(async (client) => {
       //adds the prediction
       await client.query(
-        `INSERT INTO ${TEMP_TABLE} (room_id, role, prediction, created_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (room_id, role) DO UPDATE SET prediction = EXCLUDED.prediction`,
-        [room_id, role, prediction]
+        `INSERT INTO ${TEMP_TABLE} (room_id, name, role, prediction, created_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (room_id, name, role) DO UPDATE SET prediction = EXCLUDED.prediction`,
+        [room_id, name, role, prediction]
       );
     });
 
@@ -229,7 +229,7 @@ app.post("/refinement/prediction/submit", async (req, res) => {
       const socketIds = [];
       //find socket ids for the submitting user
       activeRooms.get(room_id).forEach((userData, socketId) => {
-        if (userData.role === role) {
+        if (userData.name === name) {
           userData.hasSubmitted = true;
           socketIds.push(socketId);
         }
@@ -571,31 +571,29 @@ io.on("connection", (socket) => {
 
   socket.on("submit_prediction", async (data) => {
     try {
-      const { room_id, role, prediction } = data;
-      if (!room_id || !role || isNaN(prediction) || prediction <= 1) {
+      const { room_id, name, role, prediction } = data;
+      if (!room_id || !name || !role || isNaN(prediction) || prediction <= 0) {
         socket.emit("error", { message: "Invalid prediction data" });
         return;
       }
       await runQuery(async (client) => {
         await client.query(
-          `INSERT INTO ${TEMP_TABLE} (room_id, role, prediction, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT (room_id, role) DO UPDATE SET prediction = EXCLUDED.prediction`,
-          [room_id, role, prediction]
+          `INSERT INTO ${TEMP_TABLE} (room_id, name, role, prediction, created_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (room_id, name) DO UPDATE SET prediction = EXCLUDED.prediction`,
+          [room_id, name, role, prediction]
         );
       });
-      //update submission status for the user
       if (activeRooms.has(room_id)) {
-        //if this socket has this role, mark as submitted
-        if (activeRooms.get(room_id).has(socket.id)) {
-          const userData = activeRooms.get(room_id).get(socket.id);
+        const userData = activeRooms.get(room_id).get(socket.id);
+        if (userData?.name === name) {
           userData.hasSubmitted = true;
           //update all connected users with new user list
           io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
         }
       }
-      io.to(room_id).emit("prediction_submitted", { role, prediction });
-      console.log(`Prediction submitted for room ${room_id}: ${role} = ${prediction}`);
+      io.to(room_id).emit("prediction_submitted", { name, role, prediction });
+      console.log(`Prediction submitted for room ${room_id}: ${name} (${role}) = ${prediction}`);
     } catch (error) {
       console.error("Error in submit_prediction:", error);
       socket.emit("error", { message: "Failed to submit prediction" });
