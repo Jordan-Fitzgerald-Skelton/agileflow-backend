@@ -16,56 +16,14 @@ const isValidEmail = (email) => {
   return emailRegex.test(email);
 };
 
-// Sanitize text content to prevent injection
+// Sanitize text content
 const sanitizeText = (text) => {
   if (typeof text !== 'string') return '';
-  // Remove potential HTML/script tags and normalize whitespace
   return text.replace(/<[^>]*>/g, '')
              .replace(/\s+/g, ' ')
              .trim()
-             .substring(0, 1000); // Limit length
+             .substring(0, 1000);
 };
-
-// Rate limiting for email sending
-const emailRateLimit = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_EMAILS_PER_WINDOW = 10;
-
-const checkRateLimit = (email) => {
-  const now = Date.now();
-  const windowStart = now - RATE_LIMIT_WINDOW;
-  
-  if (!emailRateLimit.has(email)) {
-    emailRateLimit.set(email, []);
-  }
-  
-  const timestamps = emailRateLimit.get(email);
-  // Remove old timestamps
-  const recentTimestamps = timestamps.filter(timestamp => timestamp > windowStart);
-  
-  if (recentTimestamps.length >= MAX_EMAILS_PER_WINDOW) {
-    return false;
-  }
-  
-  recentTimestamps.push(now);
-  emailRateLimit.set(email, recentTimestamps);
-  return true;
-};
-
-// Clean up old rate limit entries periodically
-setInterval(() => {
-  const now = Date.now();
-  const windowStart = now - RATE_LIMIT_WINDOW;
-  
-  emailRateLimit.forEach((timestamps, email) => {
-    const recentTimestamps = timestamps.filter(timestamp => timestamp > windowStart);
-    if (recentTimestamps.length === 0) {
-      emailRateLimit.delete(email);
-    } else {
-      emailRateLimit.set(email, recentTimestamps);
-    }
-  });
-}, RATE_LIMIT_WINDOW);
 
 // Initialize email configuration
 let transporter;
@@ -74,15 +32,12 @@ const initializeEmailTransporter = () => {
   try {
     validateEmailConfig();
     
-    transporter = nodemailer.createTransporter({
+    transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
         user: process.env.APP_EMAIL,
         pass: process.env.APP_PASS,
       },
-      pool: true, // Use connection pooling
-      maxConnections: 5,
-      maxMessages: 100,
     });
 
     // Verify transporter configuration
@@ -108,10 +63,10 @@ try {
   console.error('[EMAIL] Email service initialization failed:', error);
 }
 
-// Creates and sends the email with proper error handling
+// Simple email sending function
 const sendActionNotification = async ({ email, userName, description }) => {
   try {
-    // Input validation
+    // Basic validation
     if (!email || !userName || !description) {
       throw new Error('Missing required fields: email, userName, and description are required');
     }
@@ -120,9 +75,8 @@ const sendActionNotification = async ({ email, userName, description }) => {
       throw new Error('Invalid email format');
     }
 
-    // Check rate limiting
-    if (!checkRateLimit(email)) {
-      throw new Error('Rate limit exceeded. Too many emails sent to this address recently.');
+    if (!transporter) {
+      throw new Error('Email transporter not initialized');
     }
 
     // Sanitize inputs
@@ -131,10 +85,6 @@ const sendActionNotification = async ({ email, userName, description }) => {
 
     if (!sanitizedUserName || !sanitizedDescription) {
       throw new Error('Invalid or empty content after sanitization');
-    }
-
-    if (!transporter) {
-      throw new Error('Email transporter not initialized');
     }
 
     const mailOptions = {
@@ -162,22 +112,18 @@ AgileFlow Team`,
       `
     };
 
-    // Send email with promise-based approach
     const info = await transporter.sendMail(mailOptions);
     
     console.log(`[EMAIL] Email sent successfully to ${email}:`, info.messageId);
     
     return {
       success: true,
-      messageId: info.messageId,
-      response: info.response
+      messageId: info.messageId
     };
 
   } catch (error) {
     console.error(`[EMAIL] Failed to send email to ${email}:`, error.message);
-    
-    // Re-throw the error so calling code can handle it appropriately
-    throw new Error(`Email sending failed: ${error.message}`);
+    throw error;
   }
 };
 
@@ -198,7 +144,6 @@ process.on('SIGTERM', closeEmailService);
 process.on('SIGINT', closeEmailService);
 
 module.exports = {
-  transporter,
   sendActionNotification,
   closeEmailService,
   isValidEmail
