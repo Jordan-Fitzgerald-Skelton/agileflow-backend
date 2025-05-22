@@ -580,7 +580,7 @@ io.on("connection", (socket) => {
         await client.query(
           `INSERT INTO ${TEMP_TABLE} (room_id, name, role, prediction, created_at)
          VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (room_id, name) DO UPDATE SET prediction = EXCLUDED.prediction`,
+         ON CONFLICT (room_id, name, role) DO UPDATE SET prediction = EXCLUDED.prediction`,
           [room_id, name, role, prediction]
         );
       });
