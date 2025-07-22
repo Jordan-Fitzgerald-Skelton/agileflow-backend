@@ -37,6 +37,15 @@ const VALIDATION_LIMITS = {
   MAX_PREDICTION: 1000
 };
 
+// ADD THIS AFTER THE IMPORTS (around line 10)
+const CONFIG = {
+  ROOM_CLEANUP_DELAY: 30 * 1000, // 30 seconds
+  ROOM_EXPIRY_TIME: 24 * 60 * 60 * 1000, // 24 hours
+  EMPTY_ROOM_CLEANUP_TIME: 2 * 60 * 60 * 1000, // 2 hours
+  CLEANUP_CHECK_INTERVAL: 60 * 60 * 1000, // 1 hour
+  DEFAULT_ROOM_TYPE: 'refinement'
+};
+
 // ROOM STATE MANAGEMENT: Room status enum
 const ROOM_STATUS = {
   ACTIVE: 'active',
@@ -111,6 +120,28 @@ const validateInput = {
   }
 };
 
+const validateRequest = (validationRules) => {
+  return (req, res, next) => {
+    const errors = [];
+    
+    for (const [field, validator] of Object.entries(validationRules)) {
+      const value = req.body[field] || req.query[field];
+      if (!validator(value)) {
+        errors.push(`Invalid ${field}`);
+      }
+    }
+    
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: errors.join(', ')
+      });
+    }
+    
+    next();
+  };
+};
+
 // SECURITY IMPROVEMENT: Stronger invite code generation (12-16 characters)
 const generateInviteCode = () => {
   // Generate 8 bytes (16 hex characters) for stronger security
@@ -171,39 +202,36 @@ const roomCleanupTimers = new Map();
 // CLEANUP STRATEGY: Unified cleanup system with room state management
 const cleanupRoomData = async (room_id, updateStatus = true) => {
   try {
-    const result = await runQuery(async (client) => {
-      await client.query('BEGIN');
-      
-      try {
-        // Update room status to finished if requested
-        if (updateStatus) {
-          await client.query(
-            "UPDATE rooms SET status = $1, finished_at = CURRENT_TIMESTAMP WHERE room_id = $2",
-            [ROOM_STATUS.FINISHED, room_id]
-          );
-        }
-        
-        // Safe table cleanup using whitelisted table names
+    // Use individual queries instead of transaction for simple operations
+    if (updateStatus) {
+      await runQuery(async (client) => {
         await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.refinement_predictions} WHERE room_id = $1`, 
-          [room_id]
+          "UPDATE rooms SET status = $1, finished_at = CURRENT_TIMESTAMP WHERE room_id = $2",
+          [ROOM_STATUS.FINISHED, room_id]
         );
-        await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.room_users} WHERE room_id = $1`, 
-          [room_id]
-        );
-        await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.rooms} WHERE room_id = $1`, 
-          [room_id]
-        );
-        
-        await client.query('COMMIT');
-        console.log(`[${new Date().toISOString()}] Cleaned up data for room: ${room_id}`);
-        return true;
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
+      });
+    }
+    
+    // Delete in order of foreign key dependencies
+    await runQuery(async (client) => {
+      await client.query(
+        `DELETE FROM ${ALLOWED_TABLES.refinement_predictions} WHERE room_id = $1`, 
+        [room_id]
+      );
+    });
+    
+    await runQuery(async (client) => {
+      await client.query(
+        `DELETE FROM ${ALLOWED_TABLES.room_users} WHERE room_id = $1`, 
+        [room_id]
+      );
+    });
+    
+    await runQuery(async (client) => {
+      await client.query(
+        `DELETE FROM ${ALLOWED_TABLES.rooms} WHERE room_id = $1`, 
+        [room_id]
+      );
     });
     
     // Clean up memory references
@@ -213,7 +241,8 @@ const cleanupRoomData = async (room_id, updateStatus = true) => {
       roomCleanupTimers.delete(room_id);
     }
     
-    return result;
+    console.log(`[${new Date().toISOString()}] Cleaned up data for room: ${room_id}`);
+    return true;
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Error cleaning up room data:`, error);
     return false;
@@ -245,7 +274,7 @@ const scheduleRoomCleanup = () => {
     } catch (error) {
       console.error('Scheduled cleanup error:', error);
     }
-  }, 60 * 60 * 1000); // Run every hour
+  }, CONFIG.CLEANUP_CHECK_INTERVAL); // Run every hour
 };
 
 // Start scheduled cleanup
@@ -277,9 +306,8 @@ const isRoomAccessible = async (roomId) => {
       
       // Check if room is older than 24 hours
       const roomAge = Date.now() - new Date(room.created_at).getTime();
-      const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
       
-      if (roomAge > twentyFourHoursInMs) {
+      if (roomAge > CONFIG.ROOM_EXPIRY_TIME) {
         // Mark as expired
         await client.query(
           "UPDATE rooms SET status = $1 WHERE room_id = $2",
@@ -319,7 +347,7 @@ const PredictionService = {
     }
     
     // Generate unique user room ID
-    const userRoomId = generateUserRoomId('', name, roomId);
+    const userRoomId = RoomService.getUserRoomId('', name, roomId);
     
     const result = await runQuery(async (client) => {
       await client.query('BEGIN');
@@ -355,37 +383,51 @@ const PredictionService = {
   }
 };
 
+class RoomService {
+  static userRoomIdCache = new Map();
+  
+  static getUserRoomId(email, name, roomId) {
+    const key = `${email}-${name}-${roomId}`;
+    if (!this.userRoomIdCache.has(key)) {
+      const id = generateUserRoomId(email, name, roomId);
+      this.userRoomIdCache.set(key, id);
+    }
+    return this.userRoomIdCache.get(key);
+  }
+  
+  static async checkAccessibility(roomId) {
+    // Cached version of room accessibility check
+    const cacheKey = `room_${roomId}`;
+    // Implement caching logic here
+    return isRoomAccessible(roomId);
+  }
+  
+  static clearCache() {
+    this.userRoomIdCache.clear();
+  }
+}
+
 //create a room
+// REPLACE THE ENTIRE /create/room ENDPOINT
 app.post("/create/room", async (req, res) => {
   try {
-    // Only allow refinement rooms since retro features are removed
-    const room_type = 'refinement';
-    
     const result = await runQuery(async (client) => {
-      await client.query('BEGIN');
+      const invite_code = await createUniqueInviteCode();
+      const room_id = uuidv4();
       
-      try {
-        const invite_code = await createUniqueInviteCode();
-        const room_id = uuidv4();
-        
-        const result = await client.query(`
-          INSERT INTO ${ALLOWED_TABLES.rooms} 
-          (room_id, invite_code, room_type, status, created_at) 
-          VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) 
-          RETURNING room_id, invite_code
-        `, [room_id, invite_code, room_type, ROOM_STATUS.ACTIVE]);
-        
-        await client.query('COMMIT');
-        return result;
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
+      const result = await client.query(`
+        INSERT INTO ${ALLOWED_TABLES.rooms} 
+        (room_id, invite_code, room_type, status, created_at) 
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) 
+        RETURNING room_id, invite_code
+      `, [room_id, invite_code, CONFIG.DEFAULT_ROOM_TYPE, ROOM_STATUS.ACTIVE]);
+      
+      return result;
     });
     
     res.json({
       success: true,
-      message: "Refinement Room created successfully",
+      message: "Room created successfully",
       room_id: result.rows[0].room_id,
       invite_code: result.rows[0].invite_code
     });
@@ -449,7 +491,7 @@ app.post("/join/room", async (req, res) => {
         }
         
         // Generate unique user room ID
-        const userRoomId = generateUserRoomId(email, name, room_id);
+        const userRoomId = RoomService.getUserRoomId(email, name, room_id);
         
         // Add user to room with unique identifier
         await client.query(`
@@ -516,33 +558,36 @@ app.post("/finish/room", async (req, res) => {
 });
 
 // CODE DEDUPLICATION: Using shared prediction service
-app.post("/refinement/prediction/submit", async (req, res) => {
-  try {
-    const { room_id, name, role, prediction } = req.body;
-    
-    if (!room_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Room ID is required"
+// REPLACE THE ENTIRE /refinement/prediction/submit ENDPOINT
+app.post("/refinement/prediction/submit", 
+  validateRequest({
+    room_id: (val) => val && typeof val === 'string',
+    name: validateInput.name,
+    role: validateInput.role,
+    prediction: validateInput.prediction
+  }),
+  async (req, res) => {
+    try {
+      const { room_id, name, role, prediction } = req.body;
+      
+      await PredictionService.submitPrediction(room_id, name, role, prediction);
+      
+      res.json({
+        success: true,
+        message: "Prediction submitted successfully"
       });
-    }
-    
-    await PredictionService.submitPrediction(room_id, name, role, prediction);
-    
-    res.json({
-      success: true,
-      message: "Prediction submitted successfully"
-    });
-  } catch (error) {
-    if (error.message.includes('Invalid') || error.message.includes('expired') || error.message.includes('finished')) {
-      return res.status(400).json({
+    } catch (error) {
+      const statusCode = error.message.includes('Invalid') || 
+                        error.message.includes('expired') || 
+                        error.message.includes('finished') ? 400 : 500;
+      
+      return res.status(statusCode).json({
         success: false,
         message: error.message
       });
     }
-    return handleError(res, error, "Failed to submit prediction");
   }
-});
+);
 
 app.get("/refinement/get/predictions", async (req, res) => {
   try {
@@ -674,7 +719,7 @@ io.on("connection", (socket) => {
         activeRooms.set(room_id, new Map());
       }
       
-      const userRoomId = generateUserRoomId(email, name, room_id);
+      const userRoomId = RoomService.getUserRoomId(email, name, room_id);
       const userData = {
         name,
         email,
@@ -857,19 +902,17 @@ io.on("connection", (socket) => {
 
 // MEMORY LEAK PREVENTION: Improved room cleanup scheduling
 const scheduleRoomForCleanup = (roomId) => {
-  // Clear any existing cleanup timer
+  // Clear any existing cleanup timer first
   if (roomCleanupTimers.has(roomId)) {
     clearTimeout(roomCleanupTimers.get(roomId));
+    roomCleanupTimers.delete(roomId);
   }
   
-  // Schedule new cleanup
   const cleanupTimer = setTimeout(async () => {
     try {
-      // Double-check if room is still empty
       if (activeRooms.has(roomId) && activeRooms.get(roomId).size === 0) {
         console.log(`Room ${roomId} is empty, checking for cleanup...`);
         
-        // Get room details to determine cleanup strategy
         const roomDetails = await runQuery(async (client) => {
           const result = await client.query(
             "SELECT created_at, status FROM rooms WHERE room_id = $1",
@@ -879,31 +922,25 @@ const scheduleRoomForCleanup = (roomId) => {
         });
         
         if (roomDetails) {
-          // If room is older than 2 hours and empty, clean it up
           const roomAge = Date.now() - new Date(roomDetails.created_at).getTime();
-          const twoHoursInMs = 2 * 60 * 60 * 1000;
           
-          if (roomAge > twoHoursInMs || roomDetails.status === ROOM_STATUS.FINISHED) {
+          if (roomAge > CONFIG.EMPTY_ROOM_CLEANUP_TIME || roomDetails.status === ROOM_STATUS.FINISHED) {
             console.log(`Room ${roomId} is old or finished, cleaning up data...`);
             await cleanupRoomData(roomId, true);
           } else {
-            // Remove from active rooms but keep in database
             activeRooms.delete(roomId);
           }
         } else {
-          // Room not found in database, remove from active rooms
           activeRooms.delete(roomId);
         }
       }
     } catch (error) {
       console.error(`Error in scheduled room cleanup for ${roomId}:`, error);
-      // Remove from active rooms on error
       activeRooms.delete(roomId);
     } finally {
-      // Clean up the timer reference
       roomCleanupTimers.delete(roomId);
     }
-  }, 30000); // 30 seconds delay
+  }, CONFIG.ROOM_CLEANUP_DELAY);
   
   roomCleanupTimers.set(roomId, cleanupTimer);
 };
