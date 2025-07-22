@@ -9,7 +9,6 @@ const rateLimit = require("express-rate-limit");
 
 //imports the utility files
 const { pool, runQuery } = require("./utils/db");
-const { sendActionNotification } = require("./utils/email");
 
 //cors and websocket setup with http
 const app = express();
@@ -25,8 +24,6 @@ const io = new Server(server, {
 // SECURITY IMPROVEMENT: Whitelisted table names to prevent SQL injection
 const ALLOWED_TABLES = {
   refinement_predictions: "refinement_predictions",
-  retro_comments: "retro_comments",
-  retro_actions: "retro_actions",
   room_users: "room_users",
   rooms: "rooms"
 };
@@ -35,8 +32,6 @@ const ALLOWED_TABLES = {
 const VALIDATION_LIMITS = {
   MAX_NAME_LENGTH: 100,
   MAX_EMAIL_LENGTH: 254,
-  MAX_COMMENT_LENGTH: 1000,
-  MAX_DESCRIPTION_LENGTH: 500,
   MAX_ROLE_LENGTH: 50,
   MIN_PREDICTION: 0.1,
   MAX_PREDICTION: 1000
@@ -105,15 +100,6 @@ const validateInput = {
     return codeRegex.test(code);
   },
   
-  roomType: (type) => {
-    return type && ['refinement', 'retro'].includes(type);
-  },
-  
-  comment: (comment) => {
-    if (!comment || typeof comment !== 'string') return false;
-    return comment.trim().length > 0 && comment.length <= VALIDATION_LIMITS.MAX_COMMENT_LENGTH;
-  },
-  
   prediction: (prediction) => {
     const num = parseFloat(prediction);
     return !isNaN(num) && num >= VALIDATION_LIMITS.MIN_PREDICTION && num <= VALIDATION_LIMITS.MAX_PREDICTION;
@@ -122,11 +108,6 @@ const validateInput = {
   role: (role) => {
     if (!role || typeof role !== 'string') return false;
     return role.length <= VALIDATION_LIMITS.MAX_ROLE_LENGTH && /^[a-zA-Z0-9\s\-_]+$/.test(role);
-  },
-  
-  description: (description) => {
-    if (!description || typeof description !== 'string') return false;
-    return description.trim().length > 0 && description.length <= VALIDATION_LIMITS.MAX_DESCRIPTION_LENGTH;
   }
 };
 
@@ -205,14 +186,6 @@ const cleanupRoomData = async (room_id, updateStatus = true) => {
         // Safe table cleanup using whitelisted table names
         await client.query(
           `DELETE FROM ${ALLOWED_TABLES.refinement_predictions} WHERE room_id = $1`, 
-          [room_id]
-        );
-        await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.retro_comments} WHERE room_id = $1`, 
-          [room_id]
-        );
-        await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.retro_actions} WHERE room_id = $1`, 
           [room_id]
         );
         await client.query(
@@ -385,15 +358,8 @@ const PredictionService = {
 //create a room
 app.post("/create/room", async (req, res) => {
   try {
-    const { room_type } = req.body;
-    
-    // Enhanced validation
-    if (!validateInput.roomType(room_type)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid room type. Must be 'refinement' or 'retro'."
-      });
-    }
+    // Only allow refinement rooms since retro features are removed
+    const room_type = 'refinement';
     
     const result = await runQuery(async (client) => {
       await client.query('BEGIN');
@@ -419,7 +385,7 @@ app.post("/create/room", async (req, res) => {
     
     res.json({
       success: true,
-      message: `${room_type.charAt(0).toUpperCase() + room_type.slice(1)} Room created successfully`,
+      message: "Refinement Room created successfully",
       room_id: result.rows[0].room_id,
       invite_code: result.rows[0].invite_code
     });
@@ -649,392 +615,7 @@ app.get("/refinement/get/predictions", async (req, res) => {
   }
 });
 
-//retro endpoints
-app.post("/retro/new/comment", async (req, res) => {
-  try {
-    const { room_id, comment, user_name, email } = req.body;
-    
-    if (!room_id || !comment || !user_name) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
-    }
-    
-    // Enhanced validation
-    if (!validateInput.comment(comment)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid comment format or length"
-      });
-    }
-    
-    if (!validateInput.name(user_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user name format"
-      });
-    }
-    
-    if (email && !validateInput.email(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid email format"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    // Sanitize the comment
-    const sanitizedComment = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    
-    const result = await runQuery(async (client) => {
-      const commentResult = await client.query(`
-        INSERT INTO ${ALLOWED_TABLES.retro_comments} 
-        (room_id, comment, user_name, email, created_at) 
-        VALUES ($1, $2, $3, $4, NOW()) 
-        RETURNING id
-      `, [room_id, sanitizedComment, user_name, email || null]);
-      
-      return { comment_id: commentResult.rows[0].id };
-    });
-    
-    // Emit the new comment with the users details
-    io.to(room_id).emit("new_comment", {
-      id: result.comment_id,
-      comment: sanitizedComment,
-      user_name: user_name,
-      email: email || null,
-      created_at: new Date().toISOString()
-    });
-    
-    res.json({
-      success: true,
-      message: "Comment added successfully",
-      comment_id: result.comment_id
-    });
-  } catch (error) {
-    return handleError(res, error, "Failed to add comment");
-  }
-});
-
-app.get("/retro/get/comments", async (req, res) => {
-  try {
-    const { room_id } = req.query;
-    
-    if (!room_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing room_id"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    const result = await runQuery(async (client) => {
-      const commentsResult = await client.query(`
-        SELECT id, comment, user_name, email, created_at 
-        FROM ${ALLOWED_TABLES.retro_comments} 
-        WHERE room_id = $1 
-        ORDER BY created_at ASC
-      `, [room_id]);
-      
-      return commentsResult.rows;
-    });
-    
-    res.json({
-      success: true,
-      comments: result
-    });
-  } catch (error) {
-    return handleError(res, error, "Failed to retrieve comments");
-  }
-});
-
-app.put("/retro/update/comment", async (req, res) => {
-  try {
-    const { comment_id, comment, user_name, room_id } = req.body;
-    
-    if (!comment_id || !comment || !user_name || !room_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
-    }
-    
-    // Enhanced validation
-    if (!validateInput.comment(comment)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid comment format or length"
-      });
-    }
-    
-    if (!validateInput.name(user_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user name format"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    // Sanitize the updated comment
-    const sanitizedComment = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    
-    const result = await runQuery(async (client) => {
-      await client.query('BEGIN');
-      
-      try {
-        // Check if the user is the one who created the comment
-        const checkResult = await client.query(`
-          SELECT 1 FROM ${ALLOWED_TABLES.retro_comments} 
-          WHERE id = $1 AND user_name = $2
-        `, [comment_id, user_name]);
-        
-        if (checkResult.rowCount === 0) {
-          throw new Error("Unauthorized");
-        }
-        
-        await client.query(`
-          UPDATE ${ALLOWED_TABLES.retro_comments} 
-          SET comment = $1 WHERE id = $2
-        `, [sanitizedComment, comment_id]);
-        
-        // Get the updated comment
-        const updatedResult = await client.query(`
-          SELECT id, comment, user_name, email, created_at 
-          FROM ${ALLOWED_TABLES.retro_comments} 
-          WHERE id = $1
-        `, [comment_id]);
-        
-        await client.query('COMMIT');
-        return updatedResult.rows[0];
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    });
-    
-    // Emit the updated comment
-    io.to(room_id).emit("comment_updated", result);
-    
-    res.json({
-      success: true,
-      message: "Comment updated successfully",
-      comment: result
-    });
-  } catch (error) {
-    if (error.message === "Unauthorized") {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to update this comment"
-      });
-    }
-    return handleError(res, error, "Failed to update comment");
-  }
-});
-
-app.delete("/retro/delete/comment", async (req, res) => {
-  try {
-    const { comment_id, user_name, room_id } = req.body;
-    
-    if (!comment_id || !user_name || !room_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
-    }
-    
-    if (!validateInput.name(user_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user name format"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    await runQuery(async (client) => {
-      await client.query('BEGIN');
-      
-      try {
-        // Check if the user is the one who created the comment
-        const checkResult = await client.query(`
-          SELECT 1 FROM ${ALLOWED_TABLES.retro_comments} 
-          WHERE id = $1 AND user_name = $2
-        `, [comment_id, user_name]);
-        
-        if (checkResult.rowCount === 0) {
-          throw new Error("Unauthorized");
-        }
-        
-        await client.query(`
-          DELETE FROM ${ALLOWED_TABLES.retro_comments} WHERE id = $1
-        `, [comment_id]);
-        
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    });
-    
-    // Emit that the comment was deleted
-    io.to(room_id).emit("comment_deleted", { comment_id });
-    
-    res.json({
-      success: true,
-      message: "Comment deleted successfully"
-    });
-  } catch (error) {
-    if (error.message === "Unauthorized") {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to delete this comment"
-      });
-    }
-    return handleError(res, error, "Failed to delete comment");
-  }
-});
-
-app.post("/retro/create/action", async (req, res) => {
-  try {
-    const { room_id, user_name, description, assignee_name } = req.body;
-    const assignedTo = assignee_name || user_name;
-    
-    if (!room_id || !user_name || !description) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
-    }
-    
-    // Enhanced validation
-    if (!validateInput.name(user_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user name format"
-      });
-    }
-    
-    if (!validateInput.description(description)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid description format or length"
-      });
-    }
-    
-    if (assignee_name && !validateInput.name(assignee_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid assignee name format"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    const result = await runQuery(async (client) => {
-      await client.query('BEGIN');
-      
-      try {
-        const userResult = await client.query(`
-          SELECT email FROM ${ALLOWED_TABLES.room_users} 
-          WHERE room_id = $1 AND name = $2
-        `, [room_id, assignedTo]);
-        
-        if (userResult.rowCount === 0) {
-          throw new Error("Assigned user not found in the room");
-        }
-        
-        const email = userResult.rows[0].email;
-        
-        const actionResult = await client.query(`
-          INSERT INTO ${ALLOWED_TABLES.retro_actions} 
-          (room_id, user_name, description, created_at) 
-          VALUES ($1, $2, $3, NOW()) 
-          RETURNING id
-        `, [room_id, assignedTo, description]);
-        
-        await client.query('COMMIT');
-        return { email, action_id: actionResult.rows[0].id };
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    });
-    
-    // Send the email
-    try {
-      await sendActionNotification({
-        email: result.email,
-        userName: assignedTo,
-        description: description
-      });
-    } catch (emailError) {
-      console.error('Failed to send action notification email:', emailError);
-      // Continue execution even if email fails
-    }
-    
-    io.to(room_id).emit("action_added", {
-      id: result.action_id,
-      user_name: assignedTo,
-      description
-    });
-    
-    res.json({
-      success: true,
-      message: "Action created and email sent successfully",
-      action_id: result.action_id
-    });
-  } catch (error) {
-    if (error.message === "Assigned user not found in the room") {
-      return res.status(400).json({
-        success: false,
-        message: "Assigned user not found in the room"
-      });
-    }
-    return handleError(res, error, "Failed to create action item");
-  }
-});
-
 //websockets with comprehensive error handling
-
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
   
@@ -1106,59 +687,9 @@ io.on("connection", (socket) => {
       // Update the active user list
       io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
       
-      // If this is a retro room, send existing comments
-      if (room_type === 'retro') {
-        try {
-          const commentsResult = await runQuery(async (client) => {
-            return await client.query(`
-              SELECT id, comment, user_name, email, created_at 
-              FROM ${ALLOWED_TABLES.retro_comments} 
-              WHERE room_id = $1 
-              ORDER BY created_at ASC
-            `, [room_id]);
-          });
-          
-          socket.emit("initial_comments", commentsResult.rows);
-        } catch (error) {
-          console.error("Error fetching initial comments:", error);
-          socket.emit("error", { message: "Failed to load existing comments" });
-        }
-      }
     } catch (error) {
       console.error("Error in join_room:", error);
       socket.emit("error", { message: error.message || "Failed to join room" });
-    }
-  });
-
-  socket.on("create_action", async (actionData) => {
-    try {
-      if (!actionData || !actionData.room_id || !actionData.user_name || !actionData.description) {
-        socket.emit("error", { message: "Invalid action data" });
-        return;
-      }
-      
-      // Enhanced validation
-      if (!validateInput.name(actionData.user_name)) {
-        socket.emit("error", { message: "Invalid user name format" });
-        return;
-      }
-      
-      if (!validateInput.description(actionData.description)) {
-        socket.emit("error", { message: "Invalid description format" });
-        return;
-      }
-      
-      // Check room accessibility
-      const roomCheck = await isRoomAccessible(actionData.room_id);
-      if (!roomCheck.accessible) {
-        socket.emit("error", { message: roomCheck.reason });
-        return;
-      }
-      
-      io.to(actionData.room_id).emit("action_created", actionData);
-    } catch (error) {
-      console.error("Error in create_action:", error);
-      socket.emit("error", { message: "Failed to create action" });
     }
   });
 
@@ -1375,33 +906,6 @@ const scheduleRoomForCleanup = (roomId) => {
   }, 30000); // 30 seconds delay
   
   roomCleanupTimers.set(roomId, cleanupTimer);
-};
-
-// DATABASE CONNECTION HANDLING: Enhanced error handling with retry logic
-const withRetry = async (operation, maxRetries = 3, delay = 1000) => {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      console.error(`Operation failed on attempt ${attempt}:`, error);
-      
-      if (attempt === maxRetries) {
-        throw error;
-      }
-      
-      // Exponential backoff
-      const waitTime = delay * Math.pow(2, attempt - 1);
-      console.log(`Retrying in ${waitTime}ms...`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-    }
-  }
-};
-
-// Enhanced runQuery wrapper with retry logic
-const runQueryWithRetry = async (queryFunction) => {
-  return await withRetry(async () => {
-    return await runQuery(queryFunction);
-  });
 };
 
 // CLEANUP: Graceful shutdown handling
