@@ -9,7 +9,6 @@ const rateLimit = require("express-rate-limit");
 
 //imports the utility files
 const { pool, runQuery } = require("./utils/db");
-const { sendActionNotification } = require("./utils/email");
 
 //cors and websocket setup with http
 const app = express();
@@ -22,27 +21,31 @@ const io = new Server(server, {
   }
 });
 
-// SECURITY IMPROVEMENT: Whitelisted table names to prevent SQL injection
+//Whitelisted table names to prevent SQL injection
 const ALLOWED_TABLES = {
   refinement_predictions: "refinement_predictions",
-  retro_comments: "retro_comments",
-  retro_actions: "retro_actions",
   room_users: "room_users",
   rooms: "rooms"
 };
 
-// SECURITY IMPROVEMENT: Input validation constants
+//Input validation constants
 const VALIDATION_LIMITS = {
   MAX_NAME_LENGTH: 100,
   MAX_EMAIL_LENGTH: 254,
-  MAX_COMMENT_LENGTH: 1000,
-  MAX_DESCRIPTION_LENGTH: 500,
   MAX_ROLE_LENGTH: 50,
   MIN_PREDICTION: 0.1,
   MAX_PREDICTION: 1000
 };
 
-// ROOM STATE MANAGEMENT: Room status enum
+const CONFIG = {
+  ROOM_CLEANUP_DELAY: 30 * 1000, // 30 seconds
+  ROOM_EXPIRY_TIME: 24 * 60 * 60 * 1000, // 24 hours
+  EMPTY_ROOM_CLEANUP_TIME: 2 * 60 * 60 * 1000, // 2 hours
+  CLEANUP_CHECK_INTERVAL: 60 * 60 * 1000, // 1 hour
+  DEFAULT_ROOM_TYPE: 'refinement'
+};
+
+//Room status managemnt
 const ROOM_STATUS = {
   ACTIVE: 'active',
   FINISHED: 'finished',
@@ -81,7 +84,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ENHANCED INPUT VALIDATION: Comprehensive validation functions
+//input validation functions
 const validateInput = {
   email: (email) => {
     if (!email || typeof email !== 'string') return false;
@@ -93,25 +96,16 @@ const validateInput = {
   name: (name) => {
     if (!name || typeof name !== 'string') return false;
     if (name.length > VALIDATION_LIMITS.MAX_NAME_LENGTH) return false;
-    // Allow alphanumeric, spaces, hyphens, and apostrophes
+    //allow alphanumeric, spaces, hyphens, and apostrophes
     const nameRegex = /^[a-zA-Z0-9\s\-']+$/;
     return nameRegex.test(name.trim());
   },
   
   inviteCode: (code) => {
     if (!code || typeof code !== 'string') return false;
-    // Expect 12-16 character hex string
+    //expect 12-16 character hex string
     const codeRegex = /^[a-f0-9]{12,16}$/i;
     return codeRegex.test(code);
-  },
-  
-  roomType: (type) => {
-    return type && ['refinement', 'retro'].includes(type);
-  },
-  
-  comment: (comment) => {
-    if (!comment || typeof comment !== 'string') return false;
-    return comment.trim().length > 0 && comment.length <= VALIDATION_LIMITS.MAX_COMMENT_LENGTH;
   },
   
   prediction: (prediction) => {
@@ -122,32 +116,49 @@ const validateInput = {
   role: (role) => {
     if (!role || typeof role !== 'string') return false;
     return role.length <= VALIDATION_LIMITS.MAX_ROLE_LENGTH && /^[a-zA-Z0-9\s\-_]+$/.test(role);
-  },
-  
-  description: (description) => {
-    if (!description || typeof description !== 'string') return false;
-    return description.trim().length > 0 && description.length <= VALIDATION_LIMITS.MAX_DESCRIPTION_LENGTH;
   }
 };
 
-// SECURITY IMPROVEMENT: Stronger invite code generation (12-16 characters)
+const validateRequest = (validationRules) => {
+  return (req, res, next) => {
+    const errors = [];
+    
+    for (const [field, validator] of Object.entries(validationRules)) {
+      const value = req.body[field] || req.query[field];
+      if (!validator(value)) {
+        errors.push(`Invalid ${field}`);
+      }
+    }
+    
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: errors.join(', ')
+      });
+    }
+    
+    next();
+  };
+};
+
+//invite code generation
 const generateInviteCode = () => {
-  // Generate 8 bytes (16 hex characters) for stronger security
+  // Generate 8 bytes (16 hex characters)
   return crypto.randomBytes(8).toString("hex");
 };
 
-// RACE CONDITION FIX: Invite code generation with transaction and retry logic
+//invite code generation with transaction and retry logic
 const createUniqueInviteCode = async (maxRetries = 5) => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const inviteCode = generateInviteCode();
       
-      // Use transaction to ensure atomicity
+      //uses transaction to ensure atomicity
       const result = await runQuery(async (client) => {
         await client.query('BEGIN');
         
         try {
-          // Check if code exists with FOR UPDATE to prevent race conditions
+          //check if code exists 
           const check = await client.query(
             "SELECT 1 FROM rooms WHERE invite_code = $1 FOR UPDATE", 
             [inviteCode]
@@ -177,82 +188,72 @@ const createUniqueInviteCode = async (maxRetries = 5) => {
   throw new Error('Failed to generate unique invite code');
 };
 
-// USER IDENTIFICATION: Generate unique user ID within room context
+//generate unique user ID within room context
 const generateUserRoomId = (email, name, roomId) => {
   const data = `${email}-${name}-${roomId}`;
   return crypto.createHash('sha256').update(data).digest('hex').substring(0, 16);
 };
 
-// MEMORY LEAK PREVENTION: Enhanced activeRooms management
+// activeRooms management
 const activeRooms = new Map();
 const roomCleanupTimers = new Map();
 
-// CLEANUP STRATEGY: Unified cleanup system with room state management
+//cleanup system with room state management
 const cleanupRoomData = async (room_id, updateStatus = true) => {
   try {
-    const result = await runQuery(async (client) => {
-      await client.query('BEGIN');
-      
-      try {
-        // Update room status to finished if requested
-        if (updateStatus) {
-          await client.query(
-            "UPDATE rooms SET status = $1, finished_at = CURRENT_TIMESTAMP WHERE room_id = $2",
-            [ROOM_STATUS.FINISHED, room_id]
-          );
-        }
-        
-        // Safe table cleanup using whitelisted table names
+    //uses individual queries instead of transaction for simple operations
+    if (updateStatus) {
+      await runQuery(async (client) => {
         await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.refinement_predictions} WHERE room_id = $1`, 
-          [room_id]
+          "UPDATE rooms SET status = $1, finished_at = CURRENT_TIMESTAMP WHERE room_id = $2",
+          [ROOM_STATUS.FINISHED, room_id]
         );
-        await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.retro_comments} WHERE room_id = $1`, 
-          [room_id]
-        );
-        await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.retro_actions} WHERE room_id = $1`, 
-          [room_id]
-        );
-        await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.room_users} WHERE room_id = $1`, 
-          [room_id]
-        );
-        await client.query(
-          `DELETE FROM ${ALLOWED_TABLES.rooms} WHERE room_id = $1`, 
-          [room_id]
-        );
-        
-        await client.query('COMMIT');
-        console.log(`[${new Date().toISOString()}] Cleaned up data for room: ${room_id}`);
-        return true;
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
+      });
+    }
+    
+    //delete in order of foreign key dependencies
+    await runQuery(async (client) => {
+      await client.query(
+        `DELETE FROM ${ALLOWED_TABLES.refinement_predictions} WHERE room_id = $1`, 
+        [room_id]
+      );
     });
     
-    // Clean up memory references
+    await runQuery(async (client) => {
+      await client.query(
+        `DELETE FROM ${ALLOWED_TABLES.room_users} WHERE room_id = $1`, 
+        [room_id]
+      );
+    });
+    
+    await runQuery(async (client) => {
+      await client.query(
+        `DELETE FROM ${ALLOWED_TABLES.rooms} WHERE room_id = $1`, 
+        [room_id]
+      );
+    });
+    
+    //clean up memory references
     activeRooms.delete(room_id);
     if (roomCleanupTimers.has(room_id)) {
       clearTimeout(roomCleanupTimers.get(room_id));
       roomCleanupTimers.delete(room_id);
     }
     
-    return result;
+    console.log(`[${new Date().toISOString()}] Cleaned up data for room: ${room_id}`);
+    return true;
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Error cleaning up room data:`, error);
     return false;
   }
 };
 
-// CLEANUP STRATEGY: Scheduled cleanup job for expired rooms
+//cleanup job for expired rooms
 const scheduleRoomCleanup = () => {
   setInterval(async () => {
     try {
       const expiredRooms = await runQuery(async (client) => {
-        // Clean up rooms older than 24 hours that are still active
+        //clean up rooms older than 24 hours that are still active
         const result = await client.query(`
           SELECT room_id FROM rooms 
           WHERE created_at < NOW() - INTERVAL '24 hours' 
@@ -264,7 +265,7 @@ const scheduleRoomCleanup = () => {
       for (const room of expiredRooms) {
         console.log(`Cleaning up expired room: ${room.room_id}`);
         await cleanupRoomData(room.room_id, true);
-        // Notify any connected users
+        //notify any connected users
         io.to(room.room_id).emit("room_expired", { 
           message: "This room has expired and been closed" 
         });
@@ -272,13 +273,13 @@ const scheduleRoomCleanup = () => {
     } catch (error) {
       console.error('Scheduled cleanup error:', error);
     }
-  }, 60 * 60 * 1000); // Run every hour
+  }, CONFIG.CLEANUP_CHECK_INTERVAL); //run every hour
 };
 
-// Start scheduled cleanup
+//start scheduled cleanup
 scheduleRoomCleanup();
 
-// ROOM STATE MANAGEMENT: Check if room is accessible
+//Check if room is accessible
 const isRoomAccessible = async (roomId) => {
   try {
     const result = await runQuery(async (client) => {
@@ -302,12 +303,11 @@ const isRoomAccessible = async (roomId) => {
         return { accessible: false, reason: 'Room has expired' };
       }
       
-      // Check if room is older than 24 hours
+      //check if room is older than 24 hours
       const roomAge = Date.now() - new Date(room.created_at).getTime();
-      const twentyFourHoursInMs = 24 * 60 * 60 * 1000;
       
-      if (roomAge > twentyFourHoursInMs) {
-        // Mark as expired
+      if (roomAge > CONFIG.ROOM_EXPIRY_TIME) {
+        //mark as expired
         await client.query(
           "UPDATE rooms SET status = $1 WHERE room_id = $2",
           [ROOM_STATUS.EXPIRED, roomId]
@@ -325,10 +325,10 @@ const isRoomAccessible = async (roomId) => {
   }
 };
 
-// CODE DEDUPLICATION: Shared prediction submission service
+//shared prediction submission service
 const PredictionService = {
   async submitPrediction(roomId, name, role, prediction, socketId = null) {
-    // Validate inputs
+    //validate inputs
     if (!validateInput.name(name)) {
       throw new Error('Invalid name format');
     }
@@ -339,20 +339,20 @@ const PredictionService = {
       throw new Error('Invalid prediction value');
     }
     
-    // Check room accessibility
+    //check room accessibility
     const roomCheck = await isRoomAccessible(roomId);
     if (!roomCheck.accessible) {
       throw new Error(roomCheck.reason);
     }
     
-    // Generate unique user room ID
-    const userRoomId = generateUserRoomId('', name, roomId);
+    //cenerate unique user room ID
+    const userRoomId = RoomService.getUserRoomId('', name, roomId);
     
     const result = await runQuery(async (client) => {
       await client.query('BEGIN');
       
       try {
-        // Insert/update prediction with unique constraint on (room_id, user_room_id, role)
+        //insert/update prediction with unique constraint on (room_id, user_room_id, role)
         await client.query(`
           INSERT INTO ${ALLOWED_TABLES.refinement_predictions} 
           (room_id, name, role, prediction, user_room_id, created_at)
@@ -369,7 +369,7 @@ const PredictionService = {
       }
     });
     
-    // Update activeRooms if user is connected via WebSocket
+    //update activeRooms if user is connected via WebSocket
     if (socketId && activeRooms.has(roomId)) {
       const userData = activeRooms.get(roomId).get(socketId);
       if (userData?.name === name) {
@@ -382,44 +382,51 @@ const PredictionService = {
   }
 };
 
+class RoomService {
+  static userRoomIdCache = new Map();
+  
+  static getUserRoomId(email, name, roomId) {
+    const key = `${email}-${name}-${roomId}`;
+    if (!this.userRoomIdCache.has(key)) {
+      const id = generateUserRoomId(email, name, roomId);
+      this.userRoomIdCache.set(key, id);
+    }
+    return this.userRoomIdCache.get(key);
+  }
+  
+  static async checkAccessibility(roomId) {
+    // Cached version of room accessibility check
+    const cacheKey = `room_${roomId}`;
+    // Implement caching logic here
+    return isRoomAccessible(roomId);
+  }
+  
+  static clearCache() {
+    this.userRoomIdCache.clear();
+  }
+}
+
 //create a room
+// REPLACE THE ENTIRE /create/room ENDPOINT
 app.post("/create/room", async (req, res) => {
   try {
-    const { room_type } = req.body;
-    
-    // Enhanced validation
-    if (!validateInput.roomType(room_type)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid room type. Must be 'refinement' or 'retro'."
-      });
-    }
-    
     const result = await runQuery(async (client) => {
-      await client.query('BEGIN');
+      const invite_code = await createUniqueInviteCode();
+      const room_id = uuidv4();
       
-      try {
-        const invite_code = await createUniqueInviteCode();
-        const room_id = uuidv4();
-        
-        const result = await client.query(`
-          INSERT INTO ${ALLOWED_TABLES.rooms} 
-          (room_id, invite_code, room_type, status, created_at) 
-          VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) 
-          RETURNING room_id, invite_code
-        `, [room_id, invite_code, room_type, ROOM_STATUS.ACTIVE]);
-        
-        await client.query('COMMIT');
-        return result;
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
+      const result = await client.query(`
+        INSERT INTO ${ALLOWED_TABLES.rooms} 
+        (room_id, invite_code, room_type, status, created_at) 
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) 
+        RETURNING room_id, invite_code
+      `, [room_id, invite_code, CONFIG.DEFAULT_ROOM_TYPE, ROOM_STATUS.ACTIVE]);
+      
+      return result;
     });
     
     res.json({
       success: true,
-      message: `${room_type.charAt(0).toUpperCase() + room_type.slice(1)} Room created successfully`,
+      message: "Room created successfully",
       room_id: result.rows[0].room_id,
       invite_code: result.rows[0].invite_code
     });
@@ -483,7 +490,7 @@ app.post("/join/room", async (req, res) => {
         }
         
         // Generate unique user room ID
-        const userRoomId = generateUserRoomId(email, name, room_id);
+        const userRoomId = RoomService.getUserRoomId(email, name, room_id);
         
         // Add user to room with unique identifier
         await client.query(`
@@ -550,33 +557,36 @@ app.post("/finish/room", async (req, res) => {
 });
 
 // CODE DEDUPLICATION: Using shared prediction service
-app.post("/refinement/prediction/submit", async (req, res) => {
-  try {
-    const { room_id, name, role, prediction } = req.body;
-    
-    if (!room_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Room ID is required"
+// REPLACE THE ENTIRE /refinement/prediction/submit ENDPOINT
+app.post("/refinement/prediction/submit", 
+  validateRequest({
+    room_id: (val) => val && typeof val === 'string',
+    name: validateInput.name,
+    role: validateInput.role,
+    prediction: validateInput.prediction
+  }),
+  async (req, res) => {
+    try {
+      const { room_id, name, role, prediction } = req.body;
+      
+      await PredictionService.submitPrediction(room_id, name, role, prediction);
+      
+      res.json({
+        success: true,
+        message: "Prediction submitted successfully"
       });
-    }
-    
-    await PredictionService.submitPrediction(room_id, name, role, prediction);
-    
-    res.json({
-      success: true,
-      message: "Prediction submitted successfully"
-    });
-  } catch (error) {
-    if (error.message.includes('Invalid') || error.message.includes('expired') || error.message.includes('finished')) {
-      return res.status(400).json({
+    } catch (error) {
+      const statusCode = error.message.includes('Invalid') || 
+                        error.message.includes('expired') || 
+                        error.message.includes('finished') ? 400 : 500;
+      
+      return res.status(statusCode).json({
         success: false,
         message: error.message
       });
     }
-    return handleError(res, error, "Failed to submit prediction");
   }
-});
+);
 
 app.get("/refinement/get/predictions", async (req, res) => {
   try {
@@ -649,392 +659,7 @@ app.get("/refinement/get/predictions", async (req, res) => {
   }
 });
 
-//retro endpoints
-app.post("/retro/new/comment", async (req, res) => {
-  try {
-    const { room_id, comment, user_name, email } = req.body;
-    
-    if (!room_id || !comment || !user_name) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
-    }
-    
-    // Enhanced validation
-    if (!validateInput.comment(comment)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid comment format or length"
-      });
-    }
-    
-    if (!validateInput.name(user_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user name format"
-      });
-    }
-    
-    if (email && !validateInput.email(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid email format"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    // Sanitize the comment
-    const sanitizedComment = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    
-    const result = await runQuery(async (client) => {
-      const commentResult = await client.query(`
-        INSERT INTO ${ALLOWED_TABLES.retro_comments} 
-        (room_id, comment, user_name, email, created_at) 
-        VALUES ($1, $2, $3, $4, NOW()) 
-        RETURNING id
-      `, [room_id, sanitizedComment, user_name, email || null]);
-      
-      return { comment_id: commentResult.rows[0].id };
-    });
-    
-    // Emit the new comment with the users details
-    io.to(room_id).emit("new_comment", {
-      id: result.comment_id,
-      comment: sanitizedComment,
-      user_name: user_name,
-      email: email || null,
-      created_at: new Date().toISOString()
-    });
-    
-    res.json({
-      success: true,
-      message: "Comment added successfully",
-      comment_id: result.comment_id
-    });
-  } catch (error) {
-    return handleError(res, error, "Failed to add comment");
-  }
-});
-
-app.get("/retro/get/comments", async (req, res) => {
-  try {
-    const { room_id } = req.query;
-    
-    if (!room_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing room_id"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    const result = await runQuery(async (client) => {
-      const commentsResult = await client.query(`
-        SELECT id, comment, user_name, email, created_at 
-        FROM ${ALLOWED_TABLES.retro_comments} 
-        WHERE room_id = $1 
-        ORDER BY created_at ASC
-      `, [room_id]);
-      
-      return commentsResult.rows;
-    });
-    
-    res.json({
-      success: true,
-      comments: result
-    });
-  } catch (error) {
-    return handleError(res, error, "Failed to retrieve comments");
-  }
-});
-
-app.put("/retro/update/comment", async (req, res) => {
-  try {
-    const { comment_id, comment, user_name, room_id } = req.body;
-    
-    if (!comment_id || !comment || !user_name || !room_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
-    }
-    
-    // Enhanced validation
-    if (!validateInput.comment(comment)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid comment format or length"
-      });
-    }
-    
-    if (!validateInput.name(user_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user name format"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    // Sanitize the updated comment
-    const sanitizedComment = comment.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    
-    const result = await runQuery(async (client) => {
-      await client.query('BEGIN');
-      
-      try {
-        // Check if the user is the one who created the comment
-        const checkResult = await client.query(`
-          SELECT 1 FROM ${ALLOWED_TABLES.retro_comments} 
-          WHERE id = $1 AND user_name = $2
-        `, [comment_id, user_name]);
-        
-        if (checkResult.rowCount === 0) {
-          throw new Error("Unauthorized");
-        }
-        
-        await client.query(`
-          UPDATE ${ALLOWED_TABLES.retro_comments} 
-          SET comment = $1 WHERE id = $2
-        `, [sanitizedComment, comment_id]);
-        
-        // Get the updated comment
-        const updatedResult = await client.query(`
-          SELECT id, comment, user_name, email, created_at 
-          FROM ${ALLOWED_TABLES.retro_comments} 
-          WHERE id = $1
-        `, [comment_id]);
-        
-        await client.query('COMMIT');
-        return updatedResult.rows[0];
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    });
-    
-    // Emit the updated comment
-    io.to(room_id).emit("comment_updated", result);
-    
-    res.json({
-      success: true,
-      message: "Comment updated successfully",
-      comment: result
-    });
-  } catch (error) {
-    if (error.message === "Unauthorized") {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to update this comment"
-      });
-    }
-    return handleError(res, error, "Failed to update comment");
-  }
-});
-
-app.delete("/retro/delete/comment", async (req, res) => {
-  try {
-    const { comment_id, user_name, room_id } = req.body;
-    
-    if (!comment_id || !user_name || !room_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
-    }
-    
-    if (!validateInput.name(user_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user name format"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    await runQuery(async (client) => {
-      await client.query('BEGIN');
-      
-      try {
-        // Check if the user is the one who created the comment
-        const checkResult = await client.query(`
-          SELECT 1 FROM ${ALLOWED_TABLES.retro_comments} 
-          WHERE id = $1 AND user_name = $2
-        `, [comment_id, user_name]);
-        
-        if (checkResult.rowCount === 0) {
-          throw new Error("Unauthorized");
-        }
-        
-        await client.query(`
-          DELETE FROM ${ALLOWED_TABLES.retro_comments} WHERE id = $1
-        `, [comment_id]);
-        
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    });
-    
-    // Emit that the comment was deleted
-    io.to(room_id).emit("comment_deleted", { comment_id });
-    
-    res.json({
-      success: true,
-      message: "Comment deleted successfully"
-    });
-  } catch (error) {
-    if (error.message === "Unauthorized") {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to delete this comment"
-      });
-    }
-    return handleError(res, error, "Failed to delete comment");
-  }
-});
-
-app.post("/retro/create/action", async (req, res) => {
-  try {
-    const { room_id, user_name, description, assignee_name } = req.body;
-    const assignedTo = assignee_name || user_name;
-    
-    if (!room_id || !user_name || !description) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields"
-      });
-    }
-    
-    // Enhanced validation
-    if (!validateInput.name(user_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid user name format"
-      });
-    }
-    
-    if (!validateInput.description(description)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid description format or length"
-      });
-    }
-    
-    if (assignee_name && !validateInput.name(assignee_name)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid assignee name format"
-      });
-    }
-    
-    // Check room accessibility
-    const roomCheck = await isRoomAccessible(room_id);
-    if (!roomCheck.accessible) {
-      return res.status(400).json({
-        success: false,
-        message: roomCheck.reason
-      });
-    }
-    
-    const result = await runQuery(async (client) => {
-      await client.query('BEGIN');
-      
-      try {
-        const userResult = await client.query(`
-          SELECT email FROM ${ALLOWED_TABLES.room_users} 
-          WHERE room_id = $1 AND name = $2
-        `, [room_id, assignedTo]);
-        
-        if (userResult.rowCount === 0) {
-          throw new Error("Assigned user not found in the room");
-        }
-        
-        const email = userResult.rows[0].email;
-        
-        const actionResult = await client.query(`
-          INSERT INTO ${ALLOWED_TABLES.retro_actions} 
-          (room_id, user_name, description, created_at) 
-          VALUES ($1, $2, $3, NOW()) 
-          RETURNING id
-        `, [room_id, assignedTo, description]);
-        
-        await client.query('COMMIT');
-        return { email, action_id: actionResult.rows[0].id };
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      }
-    });
-    
-    // Send the email
-    try {
-      await sendActionNotification({
-        email: result.email,
-        userName: assignedTo,
-        description: description
-      });
-    } catch (emailError) {
-      console.error('Failed to send action notification email:', emailError);
-      // Continue execution even if email fails
-    }
-    
-    io.to(room_id).emit("action_added", {
-      id: result.action_id,
-      user_name: assignedTo,
-      description
-    });
-    
-    res.json({
-      success: true,
-      message: "Action created and email sent successfully",
-      action_id: result.action_id
-    });
-  } catch (error) {
-    if (error.message === "Assigned user not found in the room") {
-      return res.status(400).json({
-        success: false,
-        message: "Assigned user not found in the room"
-      });
-    }
-    return handleError(res, error, "Failed to create action item");
-  }
-});
-
 //websockets with comprehensive error handling
-
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
   
@@ -1093,7 +718,7 @@ io.on("connection", (socket) => {
         activeRooms.set(room_id, new Map());
       }
       
-      const userRoomId = generateUserRoomId(email, name, room_id);
+      const userRoomId = RoomService.getUserRoomId(email, name, room_id);
       const userData = {
         name,
         email,
@@ -1106,59 +731,9 @@ io.on("connection", (socket) => {
       // Update the active user list
       io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
       
-      // If this is a retro room, send existing comments
-      if (room_type === 'retro') {
-        try {
-          const commentsResult = await runQuery(async (client) => {
-            return await client.query(`
-              SELECT id, comment, user_name, email, created_at 
-              FROM ${ALLOWED_TABLES.retro_comments} 
-              WHERE room_id = $1 
-              ORDER BY created_at ASC
-            `, [room_id]);
-          });
-          
-          socket.emit("initial_comments", commentsResult.rows);
-        } catch (error) {
-          console.error("Error fetching initial comments:", error);
-          socket.emit("error", { message: "Failed to load existing comments" });
-        }
-      }
     } catch (error) {
       console.error("Error in join_room:", error);
       socket.emit("error", { message: error.message || "Failed to join room" });
-    }
-  });
-
-  socket.on("create_action", async (actionData) => {
-    try {
-      if (!actionData || !actionData.room_id || !actionData.user_name || !actionData.description) {
-        socket.emit("error", { message: "Invalid action data" });
-        return;
-      }
-      
-      // Enhanced validation
-      if (!validateInput.name(actionData.user_name)) {
-        socket.emit("error", { message: "Invalid user name format" });
-        return;
-      }
-      
-      if (!validateInput.description(actionData.description)) {
-        socket.emit("error", { message: "Invalid description format" });
-        return;
-      }
-      
-      // Check room accessibility
-      const roomCheck = await isRoomAccessible(actionData.room_id);
-      if (!roomCheck.accessible) {
-        socket.emit("error", { message: roomCheck.reason });
-        return;
-      }
-      
-      io.to(actionData.room_id).emit("action_created", actionData);
-    } catch (error) {
-      console.error("Error in create_action:", error);
-      socket.emit("error", { message: "Failed to create action" });
     }
   });
 
@@ -1326,19 +901,17 @@ io.on("connection", (socket) => {
 
 // MEMORY LEAK PREVENTION: Improved room cleanup scheduling
 const scheduleRoomForCleanup = (roomId) => {
-  // Clear any existing cleanup timer
+  // Clear any existing cleanup timer first
   if (roomCleanupTimers.has(roomId)) {
     clearTimeout(roomCleanupTimers.get(roomId));
+    roomCleanupTimers.delete(roomId);
   }
   
-  // Schedule new cleanup
   const cleanupTimer = setTimeout(async () => {
     try {
-      // Double-check if room is still empty
       if (activeRooms.has(roomId) && activeRooms.get(roomId).size === 0) {
         console.log(`Room ${roomId} is empty, checking for cleanup...`);
         
-        // Get room details to determine cleanup strategy
         const roomDetails = await runQuery(async (client) => {
           const result = await client.query(
             "SELECT created_at, status FROM rooms WHERE room_id = $1",
@@ -1348,60 +921,27 @@ const scheduleRoomForCleanup = (roomId) => {
         });
         
         if (roomDetails) {
-          // If room is older than 2 hours and empty, clean it up
           const roomAge = Date.now() - new Date(roomDetails.created_at).getTime();
-          const twoHoursInMs = 2 * 60 * 60 * 1000;
           
-          if (roomAge > twoHoursInMs || roomDetails.status === ROOM_STATUS.FINISHED) {
+          if (roomAge > CONFIG.EMPTY_ROOM_CLEANUP_TIME || roomDetails.status === ROOM_STATUS.FINISHED) {
             console.log(`Room ${roomId} is old or finished, cleaning up data...`);
             await cleanupRoomData(roomId, true);
           } else {
-            // Remove from active rooms but keep in database
             activeRooms.delete(roomId);
           }
         } else {
-          // Room not found in database, remove from active rooms
           activeRooms.delete(roomId);
         }
       }
     } catch (error) {
       console.error(`Error in scheduled room cleanup for ${roomId}:`, error);
-      // Remove from active rooms on error
       activeRooms.delete(roomId);
     } finally {
-      // Clean up the timer reference
       roomCleanupTimers.delete(roomId);
     }
-  }, 30000); // 30 seconds delay
+  }, CONFIG.ROOM_CLEANUP_DELAY);
   
   roomCleanupTimers.set(roomId, cleanupTimer);
-};
-
-// DATABASE CONNECTION HANDLING: Enhanced error handling with retry logic
-const withRetry = async (operation, maxRetries = 3, delay = 1000) => {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      console.error(`Operation failed on attempt ${attempt}:`, error);
-      
-      if (attempt === maxRetries) {
-        throw error;
-      }
-      
-      // Exponential backoff
-      const waitTime = delay * Math.pow(2, attempt - 1);
-      console.log(`Retrying in ${waitTime}ms...`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-    }
-  }
-};
-
-// Enhanced runQuery wrapper with retry logic
-const runQueryWithRetry = async (queryFunction) => {
-  return await withRetry(async () => {
-    return await runQuery(queryFunction);
-  });
 };
 
 // CLEANUP: Graceful shutdown handling
