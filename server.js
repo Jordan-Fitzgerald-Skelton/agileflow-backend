@@ -21,14 +21,14 @@ const io = new Server(server, {
   }
 });
 
-// SECURITY IMPROVEMENT: Whitelisted table names to prevent SQL injection
+//Whitelisted table names to prevent SQL injection
 const ALLOWED_TABLES = {
   refinement_predictions: "refinement_predictions",
   room_users: "room_users",
   rooms: "rooms"
 };
 
-// SECURITY IMPROVEMENT: Input validation constants
+//Input validation constants
 const VALIDATION_LIMITS = {
   MAX_NAME_LENGTH: 100,
   MAX_EMAIL_LENGTH: 254,
@@ -37,7 +37,6 @@ const VALIDATION_LIMITS = {
   MAX_PREDICTION: 1000
 };
 
-// ADD THIS AFTER THE IMPORTS (around line 10)
 const CONFIG = {
   ROOM_CLEANUP_DELAY: 30 * 1000, // 30 seconds
   ROOM_EXPIRY_TIME: 24 * 60 * 60 * 1000, // 24 hours
@@ -46,7 +45,7 @@ const CONFIG = {
   DEFAULT_ROOM_TYPE: 'refinement'
 };
 
-// ROOM STATE MANAGEMENT: Room status enum
+//Room status managemnt
 const ROOM_STATUS = {
   ACTIVE: 'active',
   FINISHED: 'finished',
@@ -85,7 +84,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ENHANCED INPUT VALIDATION: Comprehensive validation functions
+//input validation functions
 const validateInput = {
   email: (email) => {
     if (!email || typeof email !== 'string') return false;
@@ -97,14 +96,14 @@ const validateInput = {
   name: (name) => {
     if (!name || typeof name !== 'string') return false;
     if (name.length > VALIDATION_LIMITS.MAX_NAME_LENGTH) return false;
-    // Allow alphanumeric, spaces, hyphens, and apostrophes
+    //allow alphanumeric, spaces, hyphens, and apostrophes
     const nameRegex = /^[a-zA-Z0-9\s\-']+$/;
     return nameRegex.test(name.trim());
   },
   
   inviteCode: (code) => {
     if (!code || typeof code !== 'string') return false;
-    // Expect 12-16 character hex string
+    //expect 12-16 character hex string
     const codeRegex = /^[a-f0-9]{12,16}$/i;
     return codeRegex.test(code);
   },
@@ -142,24 +141,24 @@ const validateRequest = (validationRules) => {
   };
 };
 
-// SECURITY IMPROVEMENT: Stronger invite code generation (12-16 characters)
+//invite code generation
 const generateInviteCode = () => {
-  // Generate 8 bytes (16 hex characters) for stronger security
+  // Generate 8 bytes (16 hex characters)
   return crypto.randomBytes(8).toString("hex");
 };
 
-// RACE CONDITION FIX: Invite code generation with transaction and retry logic
+//invite code generation with transaction and retry logic
 const createUniqueInviteCode = async (maxRetries = 5) => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const inviteCode = generateInviteCode();
       
-      // Use transaction to ensure atomicity
+      //uses transaction to ensure atomicity
       const result = await runQuery(async (client) => {
         await client.query('BEGIN');
         
         try {
-          // Check if code exists with FOR UPDATE to prevent race conditions
+          //check if code exists 
           const check = await client.query(
             "SELECT 1 FROM rooms WHERE invite_code = $1 FOR UPDATE", 
             [inviteCode]
@@ -189,20 +188,20 @@ const createUniqueInviteCode = async (maxRetries = 5) => {
   throw new Error('Failed to generate unique invite code');
 };
 
-// USER IDENTIFICATION: Generate unique user ID within room context
+//generate unique user ID within room context
 const generateUserRoomId = (email, name, roomId) => {
   const data = `${email}-${name}-${roomId}`;
   return crypto.createHash('sha256').update(data).digest('hex').substring(0, 16);
 };
 
-// MEMORY LEAK PREVENTION: Enhanced activeRooms management
+// activeRooms management
 const activeRooms = new Map();
 const roomCleanupTimers = new Map();
 
-// CLEANUP STRATEGY: Unified cleanup system with room state management
+//cleanup system with room state management
 const cleanupRoomData = async (room_id, updateStatus = true) => {
   try {
-    // Use individual queries instead of transaction for simple operations
+    //uses individual queries instead of transaction for simple operations
     if (updateStatus) {
       await runQuery(async (client) => {
         await client.query(
@@ -212,7 +211,7 @@ const cleanupRoomData = async (room_id, updateStatus = true) => {
       });
     }
     
-    // Delete in order of foreign key dependencies
+    //delete in order of foreign key dependencies
     await runQuery(async (client) => {
       await client.query(
         `DELETE FROM ${ALLOWED_TABLES.refinement_predictions} WHERE room_id = $1`, 
@@ -234,7 +233,7 @@ const cleanupRoomData = async (room_id, updateStatus = true) => {
       );
     });
     
-    // Clean up memory references
+    //clean up memory references
     activeRooms.delete(room_id);
     if (roomCleanupTimers.has(room_id)) {
       clearTimeout(roomCleanupTimers.get(room_id));
@@ -249,12 +248,12 @@ const cleanupRoomData = async (room_id, updateStatus = true) => {
   }
 };
 
-// CLEANUP STRATEGY: Scheduled cleanup job for expired rooms
+//cleanup job for expired rooms
 const scheduleRoomCleanup = () => {
   setInterval(async () => {
     try {
       const expiredRooms = await runQuery(async (client) => {
-        // Clean up rooms older than 24 hours that are still active
+        //clean up rooms older than 24 hours that are still active
         const result = await client.query(`
           SELECT room_id FROM rooms 
           WHERE created_at < NOW() - INTERVAL '24 hours' 
@@ -266,7 +265,7 @@ const scheduleRoomCleanup = () => {
       for (const room of expiredRooms) {
         console.log(`Cleaning up expired room: ${room.room_id}`);
         await cleanupRoomData(room.room_id, true);
-        // Notify any connected users
+        //notify any connected users
         io.to(room.room_id).emit("room_expired", { 
           message: "This room has expired and been closed" 
         });
@@ -274,13 +273,13 @@ const scheduleRoomCleanup = () => {
     } catch (error) {
       console.error('Scheduled cleanup error:', error);
     }
-  }, CONFIG.CLEANUP_CHECK_INTERVAL); // Run every hour
+  }, CONFIG.CLEANUP_CHECK_INTERVAL); //run every hour
 };
 
-// Start scheduled cleanup
+//start scheduled cleanup
 scheduleRoomCleanup();
 
-// ROOM STATE MANAGEMENT: Check if room is accessible
+//Check if room is accessible
 const isRoomAccessible = async (roomId) => {
   try {
     const result = await runQuery(async (client) => {
@@ -304,11 +303,11 @@ const isRoomAccessible = async (roomId) => {
         return { accessible: false, reason: 'Room has expired' };
       }
       
-      // Check if room is older than 24 hours
+      //check if room is older than 24 hours
       const roomAge = Date.now() - new Date(room.created_at).getTime();
       
       if (roomAge > CONFIG.ROOM_EXPIRY_TIME) {
-        // Mark as expired
+        //mark as expired
         await client.query(
           "UPDATE rooms SET status = $1 WHERE room_id = $2",
           [ROOM_STATUS.EXPIRED, roomId]
@@ -326,10 +325,10 @@ const isRoomAccessible = async (roomId) => {
   }
 };
 
-// CODE DEDUPLICATION: Shared prediction submission service
+//shared prediction submission service
 const PredictionService = {
   async submitPrediction(roomId, name, role, prediction, socketId = null) {
-    // Validate inputs
+    //validate inputs
     if (!validateInput.name(name)) {
       throw new Error('Invalid name format');
     }
@@ -340,20 +339,20 @@ const PredictionService = {
       throw new Error('Invalid prediction value');
     }
     
-    // Check room accessibility
+    //check room accessibility
     const roomCheck = await isRoomAccessible(roomId);
     if (!roomCheck.accessible) {
       throw new Error(roomCheck.reason);
     }
     
-    // Generate unique user room ID
+    //cenerate unique user room ID
     const userRoomId = RoomService.getUserRoomId('', name, roomId);
     
     const result = await runQuery(async (client) => {
       await client.query('BEGIN');
       
       try {
-        // Insert/update prediction with unique constraint on (room_id, user_room_id, role)
+        //insert/update prediction with unique constraint on (room_id, user_room_id, role)
         await client.query(`
           INSERT INTO ${ALLOWED_TABLES.refinement_predictions} 
           (room_id, name, role, prediction, user_room_id, created_at)
@@ -370,7 +369,7 @@ const PredictionService = {
       }
     });
     
-    // Update activeRooms if user is connected via WebSocket
+    //update activeRooms if user is connected via WebSocket
     if (socketId && activeRooms.has(roomId)) {
       const userData = activeRooms.get(roomId).get(socketId);
       if (userData?.name === name) {
