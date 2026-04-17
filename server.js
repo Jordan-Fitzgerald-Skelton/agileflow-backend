@@ -8,8 +8,8 @@ const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 
 //imports the utility files
-const { pool, runQuery } = require("./utils/db");
-const { sendActionNotification } = require("./utils/email");
+const { pool, runQuery, closeDatabasePool } = require("./utils/db");
+const { sendActionNotification, closeEmailService } = require("./utils/email");
 
 //cors and websocket setup with http
 const app = express();
@@ -130,13 +130,13 @@ const validateInput = {
   }
 };
 
-// SECURITY IMPROVEMENT: Stronger invite code generation (12-16 characters)
+//Stronger invite code generation (12-16 characters)
 const generateInviteCode = () => {
   // Generate 8 bytes (16 hex characters) for stronger security
   return crypto.randomBytes(8).toString("hex");
 };
 
-// RACE CONDITION FIX: Invite code generation with transaction and retry logic
+//Invite code generation with transaction and retry logic
 const createUniqueInviteCode = async (maxRetries = 5) => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
@@ -177,17 +177,61 @@ const createUniqueInviteCode = async (maxRetries = 5) => {
   throw new Error('Failed to generate unique invite code');
 };
 
-// USER IDENTIFICATION: Generate unique user ID within room context
+const generateHostToken = () => {
+  return crypto.randomBytes(32).toString('hex');
+};
+
+const authenticateHost = async (req, res, next) => {
+  try {
+    const token = req.headers['authorization']?.replace('Bearer ', '');
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "Host token required"
+      });
+    }
+
+    const room_id = req.body.room_id || req.query.room_id;
+
+    if (!room_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Room ID required"
+      });
+    }
+
+    const result = await runQuery(async (client) => {
+      return await client.query(
+        "SELECT 1 FROM rooms WHERE room_id = $1 AND host_token = $2",
+        [room_id, token]
+      );
+    });
+
+    if (result.rowCount === 0) {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid host token"
+      });
+    }
+
+    next();
+  } catch (error) {
+    return handleError(res, error, "Authentication failed");
+  }
+};
+
+//Generate unique user ID within room context
 const generateUserRoomId = (email, name, roomId) => {
   const data = `${email}-${name}-${roomId}`;
   return crypto.createHash('sha256').update(data).digest('hex').substring(0, 16);
 };
 
-// MEMORY LEAK PREVENTION: Enhanced activeRooms management
+//activeRooms management
 const activeRooms = new Map();
 const roomCleanupTimers = new Map();
 
-// CLEANUP STRATEGY: Unified cleanup system with room state management
+//cleanup system with room state management
 const cleanupRoomData = async (room_id, updateStatus = true) => {
   try {
     const result = await runQuery(async (client) => {
@@ -401,13 +445,14 @@ app.post("/create/room", async (req, res) => {
       try {
         const invite_code = await createUniqueInviteCode();
         const room_id = uuidv4();
-        
+        const host_token = generateHostToken();
+
         const result = await client.query(`
           INSERT INTO ${ALLOWED_TABLES.rooms} 
-          (room_id, invite_code, room_type, status, created_at) 
-          VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) 
-          RETURNING room_id, invite_code
-        `, [room_id, invite_code, room_type, ROOM_STATUS.ACTIVE]);
+          (room_id, invite_code, room_type, status, host_token, created_at) 
+          VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP) 
+          RETURNING room_id, invite_code, host_token
+        `, [room_id, invite_code, room_type, ROOM_STATUS.ACTIVE, host_token]);
         
         await client.query('COMMIT');
         return result;
@@ -421,7 +466,8 @@ app.post("/create/room", async (req, res) => {
       success: true,
       message: `${room_type.charAt(0).toUpperCase() + room_type.slice(1)} Room created successfully`,
       room_id: result.rows[0].room_id,
-      invite_code: result.rows[0].invite_code
+      invite_code: result.rows[0].invite_code,
+      host_token: result.rows[0].host_token
     });
   } catch (error) {
     return handleError(res, error, "Failed to create room");
@@ -518,7 +564,7 @@ app.post("/join/room", async (req, res) => {
   }
 });
 
-app.post("/finish/room", async (req, res) => {
+app.post("/finish/room", authenticateHost, async (req, res) => {
   try {
     const { room_id } = req.body;
     
@@ -578,7 +624,7 @@ app.post("/refinement/prediction/submit", async (req, res) => {
   }
 });
 
-app.get("/refinement/get/predictions", async (req, res) => {
+app.get("/refinement/get/predictions", authenticateHost, async (req, res) => {
   try {
     const { room_id } = req.query;
     
@@ -1184,26 +1230,38 @@ io.on("connection", (socket) => {
 
   socket.on("reset_session", async (data) => {
     try {
-      const { room_id } = data;
-      
+      const { room_id, host_token } = data;
+
+      const authResult = await runQuery(async (client) => {
+        return await client.query(
+          "SELECT 1 FROM rooms WHERE room_id = $1 AND host_token = $2",
+          [room_id, host_token]
+        );
+      });
+
+      if (authResult.rowCount === 0) {
+        socket.emit("error", { message: "Unauthorized" });
+        return;
+      }
+
       if (!room_id) {
         socket.emit("error", { message: "Room ID is required" });
         return;
       }
-      
+
       // Check room accessibility
       const roomCheck = await isRoomAccessible(room_id);
       if (!roomCheck.accessible) {
         socket.emit("error", { message: roomCheck.reason });
         return;
       }
-      
+
       // Reset the hasSubmitted status for all users in the room
       if (activeRooms.has(room_id)) {
         activeRooms.get(room_id).forEach(userData => {
           userData.hasSubmitted = false;
         });
-        
+
         // Clear any stored predictions in the database
         await runQuery(async (client) => {
           await client.query(
@@ -1211,7 +1269,7 @@ io.on("connection", (socket) => {
             [room_id]
           );
         });
-        
+
         // Emit the updated user list with reset submission status
         io.to(room_id).emit("user_list", Array.from(activeRooms.get(room_id).values()));
       }
@@ -1226,7 +1284,19 @@ io.on("connection", (socket) => {
 
   socket.on("reveal_results", async (data) => {
     try {
-      const { room_id, predictions } = data;
+      const { room_id, predictions, host_token } = data;
+
+      const authResult = await runQuery(async (client) => {
+      return await client.query(
+        "SELECT 1 FROM rooms WHERE room_id = $1 AND host_token = $2",
+        [room_id, host_token]
+        );
+      });
+
+      if (authResult.rowCount === 0) {
+        socket.emit("error", { message: "Unauthorized" });
+        return;
+      }
       
       if (!room_id || !predictions) {
         socket.emit("error", { message: "Invalid results data" });
@@ -1404,28 +1474,26 @@ const runQueryWithRetry = async (queryFunction) => {
   });
 };
 
-// CLEANUP: Graceful shutdown handling
+// Graceful shutdown handling
 const gracefulShutdown = async () => {
   console.log('Shutting down gracefully...');
-  
   try {
-    // Clear all cleanup timers
     roomCleanupTimers.forEach(timer => clearTimeout(timer));
     roomCleanupTimers.clear();
-    
-    // Notify all connected users
+
     activeRooms.forEach((users, roomId) => {
-      io.to(roomId).emit("server_shutdown", { 
-        message: "Server is shutting down. Please reconnect in a moment." 
+      io.to(roomId).emit("server_shutdown", {
+        message: "Server is shutting down. Please reconnect in a moment."
       });
     });
-    
-    // Close server
+
+    await closeEmailService();
+    await closeDatabasePool();
+
     server.close(() => {
       console.log('Server closed');
       process.exit(0);
     });
-    
   } catch (error) {
     console.error('Error during graceful shutdown:', error);
     process.exit(1);

@@ -112,19 +112,8 @@ const closeDatabasePool = async () => {
   }
 })();
 
-// Handle process termination gracefully
-process.on('SIGTERM', async () => {
-  console.log('[DB] Received SIGTERM, closing database connections...');
-  await closeDatabasePool();
-});
-
-process.on('SIGINT', async () => {
-  console.log('[DB] Received SIGINT, closing database connections...');
-  await closeDatabasePool();
-});
-
 module.exports = {
-  pool,
+  get pool() { return pool; },
   runQuery,
   connectWithRetry,
   closeDatabasePool

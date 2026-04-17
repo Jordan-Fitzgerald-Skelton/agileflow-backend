@@ -20,6 +20,9 @@ const isValidEmail = (email) => {
 const sanitizeText = (text) => {
   if (typeof text !== 'string') return '';
   return text.replace(/<[^>]*>/g, '')
+             .replace(/&/g, '&amp;')
+             .replace(/"/g, '&quot;')
+             .replace(/'/g, '&#39;')
              .replace(/\s+/g, ' ')
              .trim()
              .substring(0, 1000);
@@ -138,10 +141,6 @@ const closeEmailService = async () => {
     }
   }
 };
-
-// Handle process termination
-process.on('SIGTERM', closeEmailService);
-process.on('SIGINT', closeEmailService);
 
 module.exports = {
   sendActionNotification,
